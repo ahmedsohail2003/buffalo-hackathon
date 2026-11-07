@@ -5,7 +5,8 @@ The UB Hacking 2026 rules say project code must be written during the official h
 ## What existed before the event, and what did not come in
 
 - **Ideas only.** At EmberHacks in September 2026 I built a different project, "the cell" (github.com/ahmedsohail2003/emberhacks-cell). It was a voice-instructed SO-ARM100 work cell. STARHAND reuses some of that project's *ideas*: a validator as the trust boundary between AI and the arm, gestures as the safety channel, and a fixed camera that Gemini looks through. The rules allow planning and ideas before the event.
-- **No code.** No code, data file, test fixture or asset from that project, or from any of my earlier repositories, is in this repository. Every file in the commit history was written on November 7–8, 2026, after hacking started.
+- **No code.** No code, data file, test fixture or asset from that project, or from any of my earlier repositories, is in this project's files. Everything in the tree was written on November 7–8, 2026, after hacking started.
+- **One discarded commit in the history.** At 14:35 on November 7, before we had read the rules closely, one commit (`ad63f98`) copied that earlier project into this repository as a starting point. At 15:05 we read that this is not allowed and restarted from scratch. Commit `72e07cd` merges that history without taking any of its files, and nothing in STARHAND uses it. We have asked to remove it from the branch history entirely.
 - **Robot arm.** STARHAND uses the newer SO-101 arm, converted tonight from the public MuJoCo Menagerie model, not the SO-ARM100 data from earlier work.
 
 ## Third-party resources (credits)
