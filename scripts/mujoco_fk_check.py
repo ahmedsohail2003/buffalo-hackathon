@@ -101,6 +101,31 @@ def main() -> None:
     out["jawGapTable"] = gaps
     print("jaw gap table (rad, mm):", [(round(a, 3), round(b * 1000, 2)) for a, b in gaps])
 
+    # visual mesh placement: world bounding box of every mesh geom (group 2) at one pose, from
+    # MuJoCo's compiled (re-centred) vertices, so the converter's geom pos/quat are checked too
+    q_box = [0.3, -0.5, 0.8, 1.1, 0.4, 0.5]
+    d.qpos[:] = q_box
+    mujoco.mj_forward(m, d)
+    boxes = []
+    for g in range(m.ngeom):
+        if m.geom_type[g] != mujoco.mjtGeom.mjGEOM_MESH or m.geom_group[g] != 2:
+            continue
+        mid = m.geom_dataid[g]
+        v0, nv = m.mesh_vertadr[mid], m.mesh_vertnum[mid]
+        verts = m.mesh_vert[v0 : v0 + nv]
+        world = d.geom_xpos[g] + verts @ d.geom_xmat[g].reshape(3, 3).T
+        bay = np.array([to_bay(w) for w in world])
+        boxes.append(
+            {
+                "body": mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, m.geom_bodyid[g]),
+                "mesh": mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_MESH, mid),
+                "min": [float(v) for v in bay.min(axis=0)],
+                "max": [float(v) for v in bay.max(axis=0)],
+            }
+        )
+    out["geomBoxes"] = {"q": q_box, "boxes": boxes}
+    print(f"{len(boxes)} visual mesh geoms boxed at q={q_box}")
+
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1)
         f.write("\n")

@@ -142,9 +142,11 @@ export class Arm implements ArmApi {
 
   // ---------- stepping ----------
 
-  step(dt: number, speedFactor: number = this.gate.speedFactor()): void {
+  step(dtIn: number, speedFactor: number = this.gate.speedFactor()): void {
     const sf = Math.max(0, Math.min(1, speedFactor));
-    if (!(dt > 0)) return;
+    if (!(dtIn > 0)) return;
+    // a backgrounded tab can hand us a huge dt; never jump more than 0.1 s at once
+    const dt = Math.min(dtIn, 0.1);
     if (this.queue.length > 0) {
       const seg = this.queue[0];
       if (!seg.started) this.startSegment(seg);
@@ -269,7 +271,7 @@ export class Arm implements ArmApi {
     for (const j of jobs) {
       if (j.done) continue;
       j.done = true;
-      j.resolve(fail('ABORTED', `the ${j.name} was cancelled: ${reason}`));
+      j.resolve(fail('ABORTED', `the ${j.name} was cancelled (${reason}).`));
     }
     this.phase = 'aborted';
     this.log(`arm: all moves cancelled (${reason})`, 'safety');
@@ -322,7 +324,15 @@ export class Arm implements ArmApi {
         this.queue.push(...segs);
       });
     };
-    const p = this.chain.then(run, run).finally(() => {
+    const safeRun = async (): Promise<MoveResult> => {
+      try {
+        return await run();
+      } catch (e) {
+        // planning must never reject the caller's promise
+        return fail('UNREACHABLE', `the ${name} could not be planned (${e instanceof Error ? e.message : String(e)}).`);
+      }
+    };
+    const p = this.chain.then(safeRun, safeRun).finally(() => {
       this.inFlight--;
       if (this.queue.length === 0 && this.inFlight === 0 && this.phase !== 'aborted') this.phase = 'idle';
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Object3D } from 'three';
+import { Object3D, Quaternion, Vector3 } from 'three';
 import fk from './__fixtures__/mujoco-fk.json';
 import { ArmModel, JOINT_NAMES, decodeMesh } from './model';
 import { HOME_Q, jawGapAt, rhoOf } from './constants';
@@ -87,6 +87,41 @@ describe('so101.json + ArmModel', () => {
       expect(Math.abs(m.jawGap() - gap)).toBeLessThan(1e-6);
       expect(Math.abs(jawGapAt(g) - gap)).toBeLessThan(2e-6);
     }
+  });
+
+  it('places every visual mesh where MuJoCo does (world bounding boxes within 1.5 mm)', async () => {
+    const d = await armData();
+    const m = new ArmModel(d);
+    m.setPose(fk.geomBoxes.q);
+    const boxes = fk.geomBoxes.boxes;
+    let checked = 0;
+    for (const b of d.bodies) {
+      const pose = m.bodyPose(b.name);
+      const bq = new Quaternion(...pose.quat);
+      for (const g of b.geoms) {
+        const ref = boxes.find((x) => x.body === b.name && x.mesh === g.mesh);
+        expect(ref, `${b.name}/${g.mesh}`).toBeDefined();
+        const { positions } = decodeMesh(d.meshes[g.mesh]);
+        const gq = new Quaternion(...g.quat);
+        const v = new Vector3();
+        const lo = [Infinity, Infinity, Infinity];
+        const hi = [-Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < positions.length; i += 3) {
+          v.set(positions[i], positions[i + 1], positions[i + 2]).applyQuaternion(gq).add(new Vector3(...g.pos)).applyQuaternion(bq).add(new Vector3(...pose.pos));
+          const a = [v.x, v.y, v.z];
+          for (let k = 0; k < 3; k++) {
+            lo[k] = Math.min(lo[k], a[k]);
+            hi[k] = Math.max(hi[k], a[k]);
+          }
+        }
+        for (let k = 0; k < 3; k++) {
+          expect(Math.abs(lo[k] - ref!.min[k]), `${b.name}/${g.mesh} min[${k}]`).toBeLessThan(1.5e-3);
+          expect(Math.abs(hi[k] - ref!.max[k]), `${b.name}/${g.mesh} max[${k}]`).toBeLessThan(1.5e-3);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(boxes.length);
   });
 
   it('builds the Object3D tree and calls the mesh factory once per visual geom', async () => {
