@@ -13,6 +13,7 @@ The UB Hacking 2026 rules say project code must be written during the official h
 | Resource | Used for | License |
 | --- | --- | --- |
 | MuJoCo Menagerie `robotstudio_so101` (derived from TheRobotStudio SO-ARM100 repository) | Arm meshes and kinematics, converted by `scripts/convert-so101.mjs` | Apache-2.0 |
+| MuJoCo Python package 4.0.0 (Google DeepMind) | Development only: `scripts/mujoco_fk_check.py` checks our browser kinematics against MuJoCo (tool-centre point, joints and jaw gap agree to under 4e-8 m). Not shipped. | Apache-2.0 |
 | NASA 3D Resources: asteroid shape models for Bennu, Itokawa (NASA/JAXA), Eros and Kleopatra; Mars texture | Real asteroid samples, decimated and scaled to fit the gripper; the planet outside the bay | NASA media are generally not subject to US copyright. Credit NASA; no endorsement is implied, and the NASA insignia is not used. |
 | three.js, React, Vite, Vitest, TypeScript | Rendering and app framework | MIT / Apache-2.0 |
 | MediaPipe Tasks Vision (Gesture Recognizer, with hand landmarks) | On-device hand tracking and safety gestures | Apache-2.0 |
