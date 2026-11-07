@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { FrameCapture } from '../contracts';
 import type { BayCore } from '../app/bayTypes';
+import { REACH } from '../core';
 import type { SceneLink } from '../app/runtime';
 import { BAY_CAPTURE_SIZE, type BayCameraModel } from './bayCamera';
 import { buildContainment, buildDeck } from './deck';
@@ -17,6 +18,34 @@ const ESTOP_TINT = new THREE.Color('#ef4444');
 /** live preview refresh of the bay camera canvas, ms */
 const PREVIEW_MS = 500;
 const VIEW_HOME = { pos: new THREE.Vector3(-0.36, -0.74, 0.44), target: new THREE.Vector3(-0.01, -0.07, 0.09) };
+
+/** The arm's reach band on the deck, as a faint cyan sector (viewer only). */
+function makeReachBand(): THREE.Group {
+  const g = new THREE.Group();
+  g.name = 'reach-band';
+  const t0 = -Math.PI / 2 - REACH.bearingMax;
+  const len = 2 * REACH.bearingMax;
+  const fill = new THREE.Mesh(
+    new THREE.RingGeometry(REACH.rhoMin, REACH.rhoMax, 96, 1, t0, len),
+    new THREE.MeshBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.08, depthWrite: false }),
+  );
+  fill.position.z = 0.0006;
+  const edge = new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.5 });
+  const outline: THREE.Vector3[] = [];
+  const N = 72;
+  for (let i = 0; i <= N; i++) {
+    const th = t0 + (len * i) / N;
+    outline.push(new THREE.Vector3(REACH.rhoMax * Math.cos(th), REACH.rhoMax * Math.sin(th), 0.0008));
+  }
+  for (let i = N; i >= 0; i--) {
+    const th = t0 + (len * i) / N;
+    outline.push(new THREE.Vector3(REACH.rhoMin * Math.cos(th), REACH.rhoMin * Math.sin(th), 0.0008));
+  }
+  outline.push(outline[0]!.clone());
+  g.add(fill, new THREE.Line(new THREE.BufferGeometry().setFromPoints(outline), edge));
+  g.traverse((o) => o.layers.set(VIEW_ONLY));
+  return g;
+}
 
 interface TintSlot {
   mat: THREE.MeshStandardMaterial;
@@ -76,6 +105,7 @@ export class BayView implements SceneLink {
     // ---- bay contents (layer 0)
     this.root.add(buildDeck(core.layout, bayCam.deckFootprint()));
     this.root.add(buildContainment(core.layout));
+    this.root.add(makeReachBand());
     this.samples = new SampleLayer(core.samples);
     this.root.add(this.samples.group);
     // the SO-101: the core poses its render tree; this view owns its own copies of the materials
