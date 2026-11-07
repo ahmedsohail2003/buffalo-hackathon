@@ -1,0 +1,24 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import { makeFakeBay } from './__fixtures__/fakeBay';
+import { getGeminiClient } from './client';
+import { CoworkerPanel } from './CoworkerPanel';
+import { nullSink } from './types';
+
+describe('CoworkerPanel', () => {
+  it('renders the chat, voice controls and the ledger without a browser', () => {
+    getGeminiClient().record({ t: 1, model: 'gemini-robotics-er-2-preview', purpose: 'point', latencyMs: 812, promptTokens: 1200, outputTokens: 40, thoughtTokens: 0, costUsd: 0.0014, ok: true });
+    const html = renderToStaticMarkup(createElement(CoworkerPanel, { bay: makeFakeBay(), sink: nullSink }));
+    expect(html).toContain('CAPCOM');
+    expect(html).toContain('TALK (hold)');
+    expect(html).toContain('Connect voice');
+    expect(html).toContain('ElevenLabs');
+    expect(html).toContain('Gemini native');
+    expect(html).toContain('Robotics-ER');
+    expect(html).toContain('812 ms');
+    expect(html).toContain('$0.0014');
+    const waiting = renderToStaticMarkup(createElement(CoworkerPanel, { bay: null, sink: nullSink }));
+    expect(waiting).toContain('waiting for the bay');
+  });
+});

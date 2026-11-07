@@ -1,0 +1,147 @@
+#cloud-config
+# STARHAND on a Vultr VPS: Ubuntu 24.04, Node 22, Caddy (automatic HTTPS), systemd.
+#
+# Paste this whole file as "Cloud-Init User-Data" when you deploy the instance.
+# Before pasting, you may set DOMAIN and BRANCH in /etc/starhand/deploy.env below. With DOMAIN
+# empty the app is served at https://<ip-with-dashes>.sslip.io (HTTPS is needed for the webcam
+# and the microphone). After boot, put the keys in /etc/starhand.env and run:
+#   systemctl restart starhand
+# Full steps: deploy/vultr/README.md.
+package_update: true
+packages: [git, curl, gnupg, debian-keyring, debian-archive-keyring, apt-transport-https, ufw]
+swap:
+  filename: /swapfile
+  size: 2G
+  maxsize: 2G
+write_files:
+  - path: /etc/starhand/deploy.env
+    permissions: '0644'
+    content: |
+      # Public settings for starhand-setup, starhand-update and starhand-caddy.
+      DOMAIN=
+      BRANCH=main
+      REPO=https://github.com/ahmedsohail2003/buffalo-hackathon
+      # Optional: an email for Let's Encrypt expiry notices
+      ACME_EMAIL=
+  - path: /etc/starhand.env
+    permissions: '0600'
+    content: |
+      # Secrets for the STARHAND server, read by systemd. Fill in, then: systemctl restart starhand
+      GEMINI_API_KEY=
+      ELEVENLABS_API_KEY=
+      ELEVENLABS_VOICE_MISSION=
+      ELEVENLABS_VOICE_COWORKER=
+      # Optional:
+      # ALLOWED_ORIGINS=https://starhand.example.tech.study
+      # GEMINI_LIVE_API_VERSION=v1alpha
+  - path: /etc/systemd/system/starhand.service
+    content: |
+      [Unit]
+      Description=STARHAND server (serves the app, holds the Gemini and ElevenLabs keys)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=starhand
+      Group=starhand
+      WorkingDirectory=/opt/starhand/app
+      Environment=NODE_ENV=production PORT=8787 HOST=127.0.0.1 TRUST_PROXY=1
+      EnvironmentFile=/etc/starhand.env
+      ExecStart=/usr/bin/node server/index.mjs
+      Restart=always
+      RestartSec=2
+      NoNewPrivileges=true
+      ProtectSystem=full
+      ProtectHome=true
+      PrivateTmp=true
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/bin/starhand-caddy
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Writes /etc/caddy/Caddyfile for DOMAIN (if set) plus the sslip.io name of this server's
+      # IPv4, both with automatic HTTPS, and reloads Caddy. Run again after you change DOMAIN.
+      set -euo pipefail
+      source /etc/starhand/deploy.env
+      IP=$(hostname -I | awk '{print $1}')
+      SSLIP="$(echo "$IP" | tr . -).sslip.io"
+      SITES="$SSLIP"
+      if [ -n "${DOMAIN:-}" ]; then SITES="$DOMAIN, $SSLIP"; fi
+      {
+        if [ -n "${ACME_EMAIL:-}" ]; then printf '{\n\temail %s\n}\n\n' "$ACME_EMAIL"; fi
+        printf '%s {\n' "$SITES"
+        printf '\t@compressible not path /api/*\n'
+        printf '\tencode @compressible zstd gzip\n'
+        printf '\treverse_proxy 127.0.0.1:8787 {\n'
+        printf '\t\t# stream PCM speech and server-sent events without buffering\n'
+        printf '\t\tflush_interval -1\n'
+        printf '\t}\n}\n'
+      } > /etc/caddy/Caddyfile
+      caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      systemctl reload caddy || systemctl restart caddy
+      {
+        echo "STARHAND: https://$SSLIP"
+        if [ -n "${DOMAIN:-}" ]; then echo "STARHAND: https://$DOMAIN (once its A record points to $IP)"; fi
+        echo "Keys: /etc/starhand.env, then: systemctl restart starhand"
+        echo "Update: starhand-update [branch]   Logs: journalctl -u starhand -f"
+      } | tee /root/STARHAND.txt
+  - path: /usr/local/bin/starhand-update
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Pulls the branch (default: BRANCH in /etc/starhand/deploy.env), rebuilds and restarts.
+      set -euo pipefail
+      source /etc/starhand/deploy.env
+      BRANCH="${1:-$BRANCH}"
+      cd /opt/starhand/app
+      sudo -u starhand -H git fetch --depth 1 origin "$BRANCH"
+      sudo -u starhand -H git reset --hard FETCH_HEAD
+      sudo -u starhand -H npm ci --no-audit --no-fund
+      sudo -u starhand -H npm run build
+      systemctl restart starhand
+      echo "STARHAND updated to $(sudo -u starhand git log -1 --format='%h %s')"
+  - path: /usr/local/bin/starhand-setup
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # First boot: firewall, Node 22, Caddy, the app user, clone, build, start. Safe to re-run.
+      set -euxo pipefail
+      source /etc/starhand/deploy.env
+      export DEBIAN_FRONTEND=noninteractive
+
+      ufw allow OpenSSH
+      ufw allow 80/tcp
+      ufw allow 443/tcp
+      ufw allow 443/udp
+      ufw --force enable
+
+      if ! node --version 2>/dev/null | grep -q '^v22\.'; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        apt-get install -y nodejs
+      fi
+
+      if ! command -v caddy >/dev/null; then
+        curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o /etc/apt/sources.list.d/caddy-stable.list
+        chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update
+        apt-get install -y caddy
+      fi
+
+      id starhand >/dev/null 2>&1 || useradd --system --create-home --home-dir /opt/starhand --shell /usr/sbin/nologin starhand
+      if [ ! -d /opt/starhand/app/.git ]; then
+        sudo -u starhand -H git clone --depth 1 --branch "$BRANCH" "$REPO" /opt/starhand/app
+      fi
+      cd /opt/starhand/app
+      sudo -u starhand -H npm ci --no-audit --no-fund
+      sudo -u starhand -H npm run build
+
+      systemctl daemon-reload
+      systemctl enable --now starhand
+      systemctl enable caddy
+      /usr/local/bin/starhand-caddy
+runcmd:
+  - [bash, /usr/local/bin/starhand-setup]

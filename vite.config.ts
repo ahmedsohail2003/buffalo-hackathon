@@ -7,5 +7,5 @@ export default defineConfig({
   plugins: [react()],
   server: { proxy: { '/api': 'http://localhost:8787' } },
   build: { chunkSizeWarningLimit: 2500 },
-  test: { environment: 'node', include: ['src/**/*.test.ts'] },
+  test: { environment: 'node', include: ['src/**/*.test.ts', 'server/**/*.test.mjs'] },
 });
