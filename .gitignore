@@ -11,3 +11,10 @@ private/
 .env
 .env.*
 !.env.example
+
+# Node / Vite build output
+node_modules/
+dist/
+*.local
+*.log
+.DS_Store

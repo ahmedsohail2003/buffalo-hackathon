@@ -1,6 +1,18 @@
-# Buffalo Hackathon
+# STARHAND
 
-Project for the Buffalo Hackathon.
+Reach into an orbital sample-curation bay with your bare hand.
+
+STARHAND is a browser simulation of a sample-curation bay on a deep-space station:
+
+- **Your hand:** the webcam tracks it with MediaPipe on your own device, and a simulated SO-101 robot arm follows it. Pinch once to pick up the asteroid sample under the gripper; pinch again to put it down.
+- **Gemini:** designs new samples, such as meteorites, canisters and CubeSat parts. Gemini Robotics-ER checks the bay through a fixed camera.
+- **Code:** measures every sample against what the real gripper can hold, scales it to fit or refuses it, and says why.
+- **ElevenLabs:** is mission control's voice.
+- **Safety:** open palm stops the arm and a held fist is an emergency stop. Hand signals always override AI.
+
+Built at UB Hacking 2026 (November 7–8). Every line of code was written during the event; see [PROVENANCE.md](PROVENANCE.md) for disclosures and credits. Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+> **Status:** under construction during the hackathon. The arm is a kinematic simulation, not a real robot.
 
 ## Private files
 
