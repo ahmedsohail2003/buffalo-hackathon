@@ -1,7 +1,7 @@
 // Module-level handles shared between App, the scene and the Gemini track.
 // App sets them once the arm data has loaded; in dev, `window.__cell` = CellApi.
 
-import type { CellApi, FrameCapture, Vec3 } from '../contracts';
+import type { CellApi, FrameCapture, HandFrame, Vec3 } from '../contracts';
 import type { CobotCell } from '../cell/cellSim';
 import type { ArmController } from '../arm/controller';
 import type { ObjectRegistry } from '../cell/objects';
@@ -66,4 +66,17 @@ export function setArmRuntime(rt: ArmRuntime | null): void {
 }
 export function getArmRuntime(): ArmRuntime | null {
   return runtime;
+}
+
+// ---- UB Hacking 2026: latest hand frame (camera loop or simulated hand -> teleop) ----
+
+let handFrame: HandFrame | null = null;
+
+/** Called by the camera loop (HandPane) or the simulated hand every frame; null when no hand is seen. */
+export function setHandFrame(f: HandFrame | null): void {
+  handFrame = f;
+}
+/** Latest hand frame, or null. Consumers must check `t` for staleness. */
+export function getHandFrame(): HandFrame | null {
+  return handFrame;
 }
