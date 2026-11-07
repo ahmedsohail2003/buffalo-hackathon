@@ -18,7 +18,7 @@ Judging is in person: **3 minutes to pitch and demo, then 2 minutes of questions
 
 - **"Is it a real robot?"** No. It's a kinematic simulation of the SO-101, the arm I used to train ACT and SmolVLA policies with LeRobot. The kinematics come from the official MuJoCo model. Next step: record teleop sessions as LeRobot datasets.
 - **"What did you build this weekend?"** Everything in the repository was written during the event. Earlier projects contributed ideas only. One early commit that copied an earlier project was discarded once we read the rules; PROVENANCE.md discloses it.
-- **"What if Gemini is wrong?"** It can't move the arm directly. Every sample and move goes through code checks, and hand signals override it.
+- **"What if Gemini is wrong?"** It can't move the arm directly, and it can't even start the arm: only I can start the cycle. Every sample and move goes through code checks, and hand signals override it.
 - **"Latency?"** Hand tracking runs at about 30 Hz on the device. Gemini checks take about 1–3 s each and never sit in the safety loop.
 
 ## Recording checklist
@@ -26,3 +26,4 @@ Judging is in person: **3 minutes to pitch and demo, then 2 minutes of questions
 - Chrome, at 1280×720 or 1440×900. Allow camera and microphone. Use `?present=1` for the projector layout.
 - Record the screen plus system audio, so ElevenLabs is audible.
 - Have a backup take using the simulated hand pad (no webcam needed).
+- The YouTube shot list, voice-over and description are in [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md).

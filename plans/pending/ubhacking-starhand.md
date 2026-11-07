@@ -58,6 +58,7 @@ The original T, G, S and V modules were written tonight (from 14:37 on) against 
 | D10 | Versions | genai 2.23.0, MediaPipe 0.10.35 (WASM from the CDN at the same version), three 0.186.0 | genai 3.0 defaults to API v1, where Live returns 404. |
 | D11 | Theme | A light deck with a 1 cm grid fills every bay-camera frame. All decorations go on layer 1, so only the viewer camera sees them. | Dark asteroid samples must stay visible to Robotics-ER. |
 | D12 | Infrastructure | Vultr VPS (`vc2-2c-4gb`) with cloud-init, Node 22, Caddy and systemd. Free domain from `tech.study`. Tiger Data only after 20:00. Skip Solana and GPUs. | From the infrastructure research. Vultr has no GPUs in stock. |
+| D13 | Who starts the arm | Gemini's arm tools are refused while the bay is IDLE (`BAY_IDLE`). Only the operator starts a cycle: the Victory sign, the Cycle start key, or turning on hand teleop. | The review showed Gemini could restart the arm right after an E-STOP reset, which broke "hand signals beat AI". |
 
 ## Not yet specified
 
@@ -94,7 +95,7 @@ The original T, G, S and V modules were written tonight (from 14:37 on) against 
 | G: Fabricator (port) | **Done.** 13 presets, including 4 NASA asteroid models. |
 | D: deck | **Done.** 12 slides with real screenshots and speaker notes. |
 | Integration | **Done 16:33.** Install modules in `src/plugins.ts`. 229 tests pass and tsc is clean. In the Playwright end-to-end run, the simulated hand steers the arm onto the cube (0.1 mm), one pinch picks it, a second pinch stows it in containment ("Sample secured in containment."), STOP and RESUME are announced, and there are no console errors. |
-| Safety and security review | Running (16:35) |
+| Safety and security review | **Done 17:38.** Three reviewers (safety chain, key-holding server, AI trust boundary), then adversarial verification: 13 of 14 findings confirmed, 2 of them high. **All 13 fixed at 17:50**, each with a regression test that fails on the old code (245 tests pass; the end-to-end browser run passes again). Gemini can no longer start the arm from IDLE (D13). A hand that comes back into view already signalling holds the arm. Hand signals still fire at a few camera frames per second. The fist mask resets on every sample. An E-STOP or STOP during a design places nothing. Mission control announces containment only from the arm's own release line. check_bay answers the question asked. Grip width counts where triangle edges cross the fingertip plane. Place spots respect the bin wall and deck spacing. The Gemini proxy caps what one request can cost, and server-wide budgets cap Gemini and ElevenLabs use. |
 | Real-key smoke tests (Gemini, ElevenLabs, Live) | Waiting on the user's keys |
 | Vultr deploy, domain | Waiting on the user's account |
 | Devpost draft (due 23:00) | Text ready in `docs/SUBMISSION.md`; the user must create the project on Devpost |
