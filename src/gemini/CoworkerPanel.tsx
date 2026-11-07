@@ -60,8 +60,8 @@ const c = {
 
 const s: Record<string, CSSProperties> = {
   panel: { display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: c.panel, color: c.text, border: `1px solid ${c.border}`, borderRadius: 8, minHeight: 0, font: 'inherit' },
-  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  title: { fontWeight: 600, letterSpacing: '0.04em' },
+  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
+  title: { fontWeight: 600, letterSpacing: '0.04em', whiteSpace: 'nowrap' },
   chips: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   chip: { fontSize: 11, padding: '2px 8px', borderRadius: 999, border: `1px solid ${c.border}`, color: c.dim },
   log: { flex: 1, minHeight: 120, maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, lineHeight: 1.35 },
