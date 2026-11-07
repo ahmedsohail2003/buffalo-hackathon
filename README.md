@@ -66,6 +66,45 @@ AI can never start, stop, resume or reset the bay. Precedence is: hand signals, 
   - the NASA asteroid shape models
 - **Simulated:** the arm is a kinematic simulation with no physics. It is not a real robot. Samples attach to the jaw by rule, and their masses come from assumed densities.
 
+## Run it
+
+```bash
+git clone https://github.com/ahmedsohail2003/buffalo-hackathon
+cd buffalo-hackathon
+npm ci
+npm run dev                  # open http://localhost:5173/?sim=1 for the simulated hand (no camera, no keys)
+```
+
+### Real voice and AI (local)
+
+1. Copy the example settings:
+
+   ```bash
+   cp .env.example .env.local
+   ```
+
+2. Fill in the keys in `.env.local`:
+   - `GEMINI_API_KEY` and `ELEVENLABS_API_KEY`, for the server.
+   - `VITE_GEMINI_API_KEY` (optional): lets the browser call Gemini directly. Use it on your own laptop only.
+
+3. Start the server in one terminal:
+
+   ```bash
+   npm run server
+   ```
+
+4. Start the app in a second terminal:
+
+   ```bash
+   npm run dev
+   ```
+
+5. Open http://localhost:5173 in Chrome. Allow the camera, then click **Enable camera** to use your real hand. **Connect voice** turns on Gemini Live with the ElevenLabs voice.
+
+### Public deploy
+
+See [deploy/vultr/README.md](deploy/vultr/README.md): one VPS with Caddy for HTTPS. The keys live only on the server.
+
 ## Development
 
 ```bash

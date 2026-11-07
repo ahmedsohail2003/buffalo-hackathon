@@ -40,7 +40,17 @@ STARHAND is a sample-curation bay on a deep-space station, running in your brows
 
 ## How we built it
 
-`<fill after integration: architecture diagram, stack, the trust boundary "Gemini proposes, code decides", safety precedence "hand signals > panel > code gate > AI">`
+- **Arm.** We converted the SO-101 from MuJoCo Menagerie (MJCF plus STL) into a compact web model. We wrote forward and inverse kinematics for the browser, using damped least squares with the gripper held pointing down. We checked them against MuJoCo itself: the tool-centre point, joints and jaw gap agree to under 4e-8 m. Hover height, carry height, reach band and jaw-gap mapping are all derived from the model, not guessed.
+- **Shared-autonomy teleop.** MediaPipe's Gesture Recognizer gives 21 hand landmarks and a gesture label in one pass on your device. The hand sets a hover target, smoothed with a One-Euro filter and clamped into the reach band. A pinch is a click that calls the same checked pick and place routines the AI uses. If the hand leaves view, the arm holds. A fist is masked only during a real pinch, for at most 500 ms, so a real emergency stop is never hidden.
+- **Fabricator.** Gemini Flash writes a JSON shape program constrained by a JSON schema. Code then:
+  - clamps every number;
+  - builds a mesh from primitives, rocks (noise-displaced icospheres with craters), lathes, extrusions or NASA shape models;
+  - measures the width across the jaws within the band the pads actually touch;
+  - scales the sample to fit, or refuses it with a sentence the voice can say.
+- **Gemini Robotics-ER** looks through a fixed 768 × 768 bay camera to point at samples (error shown in millimetres) and to verify placements.
+- **Voice.** Gemini Live listens on hold-to-talk and calls the same tools. Its replies are spoken by ElevenLabs, streamed as 24 kHz PCM with Apollo Quindar tones. A mission-control announcer speaks safety events.
+- **Server.** A dependency-free Node server holds every key. It proxies Gemini with a model allowlist and per-IP rate limits, mints short-lived Live tokens, and streams speech. It deploys to a Vultr VPS behind Caddy.
+- **Safety order:** hand signals, then the on-screen panel, then the code gate, then AI. Gemini proposes; code decides.
 
 - three.js, React and Vite in the browser.
 - MuJoCo Menagerie's SO-101 model, converted to the web.
@@ -52,15 +62,19 @@ STARHAND is a sample-curation bay on a deep-space station, running in your brows
 
 ## Challenges we ran into
 
-`<fill>`
+- **A tight workspace.** With the gripper pointing straight down, the SO-101's wrist limit caps the tool-centre point at about 86 mm, which leaves a narrow reach band. Shared autonomy was the answer: the hand gives intent, and checked code does the fine motion.
+- **Pinch versus fist.** A pinch can look like a fist to a gesture model. Pinches became short clicks, and the fist mask became pose-checked and time-capped.
+- **Keeping the AI's view clean.** Stars, Mars and glass are drawn on a render layer the bay camera cannot see, so Robotics-ER only ever sees a light deck with a 1 cm grid.
 
 ## Accomplishments that we're proud of
 
-`<fill>`
+- **A tested end-to-end loop on the real SO-101 kinematics.** A simulated hand steers the arm to within 0.1 mm of a sample. One pinch picks it, a second pinch stows it in containment, and mission control says "Sample secured in containment."
+- **Physically plausible AI-made objects.** Every sample on the deck fits the real gripper: an iron meteorite designed at 204 g is shrunk to 90 g, and an antenna boom is refused with a reason.
+- **About 230 automated tests**, written during the event.
 
 ## What we learned (new skills)
 
-`<fill: on-device hand-tracking teleoperation, procedural 3D from AI shape programs, ElevenLabs voice and sound design, deploying on Vultr>`
+On-device hand-tracking teleoperation with MediaPipe. Converting and validating a MuJoCo robot model for the web. Procedural 3D from AI shape programs, with geometric guardrails. ElevenLabs streaming voice and sound design. Deploying a key-holding server on Vultr.
 
 ## What's next
 
