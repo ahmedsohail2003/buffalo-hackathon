@@ -85,6 +85,39 @@ describe('runtime safety wiring', () => {
   });
 });
 
+describe('runtime safety wiring at low camera frame rates', () => {
+  /** a camera that delivers one frame every intervalMs, ticking at 60 Hz in between */
+  function slowCamera(gesture: string, intervalMs: number, ms: number): void {
+    const end = t + ms;
+    let next = t;
+    while (t < end) {
+      if (t >= next) {
+        setHandFrame({ t, landmarks: [], gesture, gestureScore: 0.95, source: 'camera' });
+        next += intervalMs;
+      }
+      t += 16;
+      rt.tick(t);
+    }
+  }
+
+  it('a fist held at 2 fps still E-STOPs and a palm still STOPs', () => {
+    const gate = rt.core.gate;
+    rt.applySignal('CYCLE_START', 'panel');
+    expect(gate.state()).toBe('RUNNING');
+    slowCamera('Open_Palm', 500, 2500);
+    expect(gate.state()).toBe('STOPPED');
+    slowCamera('Closed_Fist', 590, 4000);
+    expect(gate.state()).toBe('ESTOPPED');
+  });
+
+  it('while a fist is held at a slow frame rate, the panel reset is refused between frames', () => {
+    rt.applySignal('ESTOP', 'panel');
+    setHandFrame({ t, landmarks: [], gesture: 'Closed_Fist', gestureScore: 0.95, source: 'camera' });
+    expect(rt.fistHeld(t + 420)).toBe(true);
+    expect(rt.fistHeld(t + 700)).toBe(false);
+  });
+});
+
 describe('runtime loop', () => {
   it('runs tick hooks before the arm steps and hands them the safety snapshot', () => {
     const order: string[] = [];
