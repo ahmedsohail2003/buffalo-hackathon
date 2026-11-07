@@ -1,0 +1,25 @@
+# G2 evidence — command log, Claude Browser http://localhost:5173/?sim=1, 2026-09-19 14:03 EDT (A5 merged app, HEAD 5e9808b + staged A work)
+00:00.000 ARM READY — SO-ARM100 kinematic model loaded (FK/IK validated against MuJoCo fixtures)
+00:26.624 TASK START — auto CYCLE START
+00:29.442 ARMED STOP — hold 600 ms
+00:30.067 FIRED STOP (828 ms hold)
+00:31.618 ARMED RESUME — hold 600 ms
+00:32.271 FIRED RESUME (856 ms hold)
+00:33.767 ARMED SLOW MODE — hold 600 ms
+00:34.392 FIRED SLOW MODE (857 ms hold)
+00:36.070 ARMED EMERGENCY STOP — hold 1500 ms
+00:37.750 ABORTED: EMERGENCY STOP — arm frozen, pending motion rejected
+00:37.750 FIRED EMERGENCY STOP (1884 ms hold)
+00:38.065 E-STOP RESET step 1 of 2 (panel)
+00:38.281 E-STOP RESET confirmed — cell IDLE
+02:35.379 TASK START — auto CYCLE START
+02:37.189 TASK ▶ "put the red block in the tray"
+02:40.218 ER point LOW 3.0 s  block_1 err 2.5 mm, cylinder_1 err 3.6 mm  $0.0022
+02:41.457 ER plan HIGH 1.2 s  1920/12/140 tok  $0.0027  → place_in_tray()
+02:46.524 TOOL place_in_tray() → ok  tcp (-180,-130,90) mm
+02:48.406 ER check LOW 1.9 s ✓ "The red block is resting inside the tray and the gripper is open above it."
+02:49.582 ER act LOW 1.2 s  3224/28/14 tok  $0.0034  → done(true,I have successfully placed the red block in the tray.)
+02:49.582 ER done ✓ "I have successfully placed the red block in the tray."  4 calls  $0.010
+# window.__cell probes during the same session: pick('block_1') → {ok:true, tcp_mm:[0,-230,90], held:'block_1'}; hold '1' at 'pick: descend' → STOPPED, q frozen, promise pending; '3' → RUNNING; '4' → SLOW 50%;
+# hold '2' 1.9 s → ESTOPPED, placeInTray → {ok:false, code:'ABORTED', reason:'EMERGENCY STOP'}, arm tint #e06060, e-stop panel; two-step reset → IDLE, tint #dedede.
+# capture().jpegB64.length = 133596; projectMujoco([0,-0.23,0.012]) = [564,577]; capture pixel there = rgb(181,8,10) (red block); G2-cell.jpg to be saved from the dev "G2" evidence button in a visible Chrome window.

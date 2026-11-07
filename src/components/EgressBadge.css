@@ -1,0 +1,20 @@
+.egress-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border, #2a3347);
+  border-radius: 999px;
+  background: var(--surface, #141926);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-dim, #8a94a8);
+  white-space: nowrap;
+}
+.egress-badge .egress-label { color: var(--warn, #f59e0b); letter-spacing: 0.06em; font-weight: 600; }
+.egress-badge .egress-sep { opacity: 0.5; }
+.egress-badge b { color: var(--text, #e6eaf2); font-weight: 600; }
+.egress-badge .egress-dot { color: var(--text-dim, #8a94a8); }
+.egress-badge .egress-dot.on { color: var(--danger, #ef4444); animation: egress-pulse 0.9s ease-in-out infinite; }
+.egress-badge.mic-on { border-color: var(--danger, #ef4444); }
+@keyframes egress-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
