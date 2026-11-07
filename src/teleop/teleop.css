@@ -1,0 +1,92 @@
+/* Hand teleop: toggle, status chip, hint and simulated hand pad (theme variables with fallbacks). */
+.teleop-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  min-width: 0;
+}
+.teleop-row {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.teleop-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.35));
+  background: transparent;
+  color: var(--text, #e2e8f0);
+  cursor: pointer;
+}
+.teleop-toggle:disabled { opacity: 0.5; cursor: default; }
+.teleop-toggle.on {
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.6);
+  background: rgba(34, 211, 238, 0.1);
+}
+.teleop-chip {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim, #94a3b8);
+  white-space: nowrap;
+}
+.teleop-mode {
+  flex: 0 0 auto;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.35));
+}
+.teleop-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.teleop-chip.mode-following .teleop-mode { color: #22d3ee; border-color: rgba(34, 211, 238, 0.5); }
+.teleop-chip.mode-grasping .teleop-mode,
+.teleop-chip.mode-placing .teleop-mode { color: #34d399; border-color: rgba(52, 211, 153, 0.5); }
+.teleop-chip.mode-holding .teleop-mode { color: #f59e0b; border-color: rgba(245, 158, 11, 0.5); }
+.teleop-chip.mode-blocked .teleop-mode,
+.teleop-chip.mode-off .teleop-mode { color: #ef4444; border-color: rgba(239, 68, 68, 0.5); }
+.teleop-hint {
+  align-self: stretch;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-dim, #94a3b8);
+}
+.teleop-pad {
+  position: relative;
+  width: 240px;
+  height: 180px;
+  max-width: 100%;
+  flex: 0 0 auto;
+  border: 1px dashed rgba(125, 211, 252, 0.45);
+  border-radius: 8px;
+  background: var(--bg, #05070d);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+.teleop-pad canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.teleop-pad-label {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 4px;
+  font-size: 10px;
+  color: var(--text-dim, #94a3b8);
+  text-align: center;
+  pointer-events: none;
+}
