@@ -237,7 +237,7 @@ export class LiveVoice {
   events: LiveEvents = {};
   private readonly bay: BayApi;
   private readonly sink: LogSink | null;
-  private readonly toolCtx: ToolContext;
+  private readonly tools: ToolContext;
   private readonly speaker: SpeakerLike | null;
   private readonly connector: LiveConnector;
   private readonly mic: MicLike;
@@ -269,7 +269,7 @@ export class LiveVoice {
   constructor(opts: LiveVoiceOptions) {
     this.bay = opts.bay;
     this.sink = opts.sink ?? opts.tools?.sink ?? null;
-    this.toolCtx = { ...opts.tools, ...(this.sink ? { sink: this.sink } : {}) };
+    this.tools = opts.tools ?? {};
     this.speaker = opts.speaker ?? null;
     this.output = opts.output ?? (opts.speaker ? 'elevenlabs' : 'native');
     this.connector = opts.connector ?? defaultConnector();
@@ -392,6 +392,11 @@ export class LiveVoice {
   }
 
   // ---- internals ----------------------------------------------------------------------------
+
+  /** Read at each call, so wiring that arrives later (the fabricator) is used. */
+  private toolCtx(): ToolContext {
+    return { ...this.tools, ...(this.sink ? { sink: this.sink } : {}) };
+  }
 
   private setState(s: LiveState, detail?: string): void {
     this.state = s;
@@ -559,14 +564,14 @@ export class LiveVoice {
       const nonBlocking = KNOWN_TOOLS.has(name) && !INSTANT_TOOLS.has(name);
       if (!nonBlocking || gateRefusal(this.bay, name)) {
         // Instant answers (and refusals) go straight back; a refusal is spoken when CAPCOM is idle.
-        const result = await dispatchTool(this.bay, name, args, 'live', this.toolCtx);
+        const result = await dispatchTool(this.bay, name, args, 'live', this.toolCtx());
         this.events.onTool?.(`${name} -> ${summarizeResult(name, result)}`);
         this.respond(fc.id, name, result, nonBlocking ? 'WHEN_IDLE' : undefined);
         continue;
       }
       this.respond(fc.id, name, { ok: true, status: 'started', note: 'Running now. The result follows as a [BAY EVENT] message.' }, 'SILENT');
       this.events.onTool?.(`${name}(${formatArgs(args)}) started`);
-      void dispatchTool(this.bay, name, args, 'live', this.toolCtx).then((result) => {
+      void dispatchTool(this.bay, name, args, 'live', this.toolCtx()).then((result) => {
         const line = `${name}(${formatArgs(args)}) ${result.ok ? 'succeeded' : 'failed'}: ${summarizeResult(name, result)}`;
         this.events.onTool?.(line);
         this.sendBayEvent(line);
