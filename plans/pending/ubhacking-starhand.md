@@ -35,10 +35,10 @@ Architecture: [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md). Disclosures: [
 | C: arm core + safety | new builder | building | Convert the SO-101 model from Menagerie, kinematics (forward and inverse), controller with servo, primitives, sample registry and validator, bay gate, gesture state machine; tests |
 | U: scene + UI shell | new builder | building | Mission-control layout, three.js bay with the bay camera, space environment, hand pane with the MediaPipe loop, log |
 | A: Gemini + voice | new builder | building | Client and ledger with a proxy, coworker tool loop, Robotics-ER point and verify, Live voice to ElevenLabs, server, Vultr kit |
-| Port T: teleop | teleop builder | modules done; port pending | `src/teleop/*` moves onto the C and U interfaces |
+| Port T: teleop | teleop builder | **ported 15:13**: `clean/teleop`, 4 commits, 26 tests | `createTeleop(bay, cfg)`, camera-loop helpers, `TeleopPanel`, `SimHandPad`, scene hook |
 | Port G: fabricator | fabricator builder | modules building; port pending | `src/fabricator/*` plus NASA asteroids move onto the C, U and A interfaces |
-| Port S: theme | theme builder | module done; U ports it | `src/scene/environment.ts`, palette |
-| Port V: voice/server | voice builder | building; A ports it | `server/index.mjs`, `src/voice/*` |
+| Port S: theme | theme builder | stopped 15:08; U builds the look fresh from the research reference | — |
+| Port V: voice/server | voice builder | stopped 15:08; A builds it fresh from the research prototypes | — |
 
 The original T, G, S and V modules were written tonight (from 14:37 on) against a scratch base that has since been discarded. Only their own new files are copied into this repository; the scratch base never is.
 
@@ -86,7 +86,8 @@ The original T, G, S and V modules were written tonight (from 14:37 on) against 
 | Phase | Status |
 | --- | --- |
 | Research (9 agents) | done 15:00 |
-| Clean foundation | done 15:15 |
-| Tracks C, U, A | building |
-| Port T, G, S, V | pending |
+| Clean foundation | done 15:00 (`be6251e`); public tip clean via a non-destructive merge at 15:10 |
+| Tracks C, U, A | building (started 15:05) |
+| Port T | done 15:13 |
+| Port G | building |
 | Integration and end-to-end testing | pending |
