@@ -19,6 +19,7 @@ The UB Hacking 2026 rules say project code must be written during the official h
 | three.js, React, Vite, Vitest, TypeScript | Rendering and app framework | MIT / Apache-2.0 |
 | MediaPipe Tasks Vision (Gesture Recognizer, with hand landmarks) | On-device hand tracking and safety gestures | Apache-2.0 |
 | `@google/genai` | Gemini API client | Apache-2.0 |
+| Inter and JetBrains Mono typefaces | UI and telemetry type: Latin subsets self-hosted in `public/fonts/` (licence text alongside) | SIL OFL-1.1 (Inter); Apache-2.0 / SIL OFL-1.1 (JetBrains Mono) |
 
 CadPilot (an EmberHacks 2026 project) inspired one technique: asking a model for dimensions first, then repairing errors from validator feedback. No CadPilot code is used; its repository has no license.
 
