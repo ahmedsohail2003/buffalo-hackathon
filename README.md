@@ -14,6 +14,61 @@ Built at UB Hacking 2026 (November 7–8). Every line of code was written during
 
 > **Status:** under construction during the hackathon. The arm is a kinematic simulation, not a real robot.
 
+## How it works
+
+### Hand teleop: you say where and when, the arm's checked code does the rest
+
+Turn on **Hand teleop** and the gripper follows your hand over the bay deck. A cyan ring on the deck shows where it is heading.
+
+- **To pick up a sample:** hover over it and pinch your thumb and index finger together once.
+- **To put it down:** move to where you want it, or over the containment bin, and pinch again.
+
+Your hand only sets the target. The arm's own checked code plans the exact descent, sets the grip width and confirms the sample is held. With no hand in view, the arm holds still.
+
+No webcam? An on-screen pad stands in for your hand: move the mouse to steer and press Space to pinch.
+
+### The Fabricator: Gemini proposes, code decides
+
+You describe a sample, such as "an iron meteorite, about five centimetres". Gemini answers with a small JSON shape program: rocks, lathes, extrusions and other primitives, plus a material. Code then does the rest:
+
+1. Clamps every number and builds one mesh.
+2. Measures it the way the SO-101's jaw would meet it: the narrowest width the jaw closes on, the height, the footprint, and the mass from densities set by code.
+3. Scales it uniformly to fit the arm: grip width 15–45 mm, height up to 45 mm, mass up to 100 g. If no scale fits, it refuses with a sentence mission control can read out.
+4. Turns the narrow side onto the jaw's closing axis, so every sample that reaches the deck can actually be grasped.
+
+If the sample is refused, Gemini gets one repair attempt using that sentence; after that, the closest preset is used. The real NASA shape models of Bennu, Itokawa, Eros and Kleopatra are presets too, scaled down from kilometres to millimetres.
+
+### Safety: hand signals always win
+
+| Signal | Effect |
+| --- | --- |
+| Open palm, held about 0.6 s | STOP: the arm freezes where it is |
+| Thumbs-up | RESUME |
+| Fist held 1.5 s | EMERGENCY STOP: every move is aborted; a two-step reset on screen is needed |
+| Index finger up | SLOW: half speed |
+| V sign | CYCLE START |
+
+AI can never start, stop, resume or reset the bay. Precedence is: hand signals, then the on-screen panel, then the code gate, then AI.
+
+## What is real and what is simulated
+
+- **Real:**
+  - your hand tracking (on your device)
+  - your voice
+  - the Gemini and ElevenLabs calls
+  - the SO-101 geometry and joint limits (MuJoCo Menagerie)
+  - the NASA asteroid shape models
+- **Simulated:** the arm is a kinematic simulation with no physics. It is not a real robot. Samples attach to the jaw by rule, and their masses come from assumed densities.
+
+## Development
+
+```bash
+npm install
+npm run dev        # http://localhost:5173  (?sim=1 forces the simulated hand)
+npm test           # vitest: arm core, teleop, Fabricator and the cross-module tests on the real SO-101 model
+npm run build
+```
+
 ## Private files
 
 This repository is public, including its commit history. Git ignores the locations below, so files in them are never committed or pushed:
