@@ -1,0 +1,28 @@
+/* fabricator */
+.fab { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border, #2a3347); border-radius: 8px; background: var(--panel, #0b0e14); color: var(--text, #e6eaf2); font-size: 12px; }
+.fab-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.fab-head h3 { margin: 0; font-size: 13px; letter-spacing: 0.04em; }
+.fab-sub { color: var(--text-dim, #8a94a8); font-size: 10px; }
+.fab-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.fab-input { flex: 1; min-width: 120px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border, #2a3347); background: var(--bg, #05070d); color: inherit; font: inherit; }
+.fab-btn { padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border, #2a3347); background: #1b2233; color: inherit; font: inherit; cursor: pointer; }
+.fab-btn.primary { background: var(--accent, #7dd3fc); color: #06121c; border-color: transparent; font-weight: 600; }
+.fab-btn:disabled, .fab-chip:disabled { opacity: 0.45; cursor: default; }
+.fab-note { color: var(--warn, #f59e0b); font-size: 10px; }
+.fab-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.fab-chip { padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border, #2a3347); background: #1b2233; color: inherit; font: inherit; font-size: 11px; cursor: pointer; }
+.fab-chip.nasa { border-color: #3b5b8f; }
+.fab-chip:hover:not(:disabled) { border-color: var(--accent, #7dd3fc); }
+.fab-card { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border, #2a3347); display: flex; flex-direction: column; gap: 4px; }
+.fab-card.ok { border-color: var(--ok, #34d399); }
+.fab-card.fail { border-color: var(--danger, #ef4444); background: rgba(239, 68, 68, 0.08); }
+.fab-card-head { display: flex; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+.fab-name { font-weight: 600; }
+.fab-src { font-family: var(--mono, monospace); font-size: 10px; color: var(--text-dim, #8a94a8); }
+.fab-metrics { display: flex; flex-wrap: wrap; gap: 10px; font-family: var(--mono, monospace); font-size: 11px; }
+.fab-metrics b { font-size: 13px; }
+.fab-metrics .scaled b { color: var(--warn, #f59e0b); }
+.fab-reasons { margin: 0; padding-left: 0; list-style: none; font-size: 11px; color: var(--text-dim, #8a94a8); }
+.fab-reasons li.lead { color: var(--ok, #34d399); }
+.fab-reason { color: var(--danger, #ef4444); font-weight: 600; }
+.fab-suggest { font-size: 11px; }
