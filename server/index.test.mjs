@@ -191,14 +191,14 @@ describe('Gemini proxy', () => {
     });
     expect(r.status).toBe(200);
     let call = upstream.seen.findLast((s) => s.path.includes(':generateContent'));
-    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 }, responseMimeType: 'application/json' });
+    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 32768, thinkingConfig: { thinkingBudget: 4096 }, responseMimeType: 'application/json' });
     expect(call.body.tools).toEqual([fn]);
 
     // snake_case field names reach the same fields upstream, so they are clamped too; -1 (dynamic) is bounded
     await post(url, { contents: [], generation_config: { candidate_count: 4, max_output_tokens: 99999, thinking_config: { thinking_budget: -1 } }, tools: [{ google_search: {} }] });
     call = upstream.seen.findLast((s) => s.path.includes(':generateContent'));
     expect(call.body.generation_config).toBeUndefined();
-    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 } });
+    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 32768, thinkingConfig: { thinkingBudget: 4096 } });
     expect(call.body.tools).toBeUndefined();
 
     // what the app sends is left alone apart from the ceilings: a thinking level gets no budget added

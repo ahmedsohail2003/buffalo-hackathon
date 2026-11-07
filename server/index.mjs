@@ -51,8 +51,8 @@ export function loadConfig(env = process.env) {
       tokenApiVersion: env.GEMINI_TOKEN_API_VERSION || 'v1alpha',
       liveApiVersion: env.GEMINI_LIVE_API_VERSION || 'v1alpha',
       storeFalse: env.GEMINI_STORE_FALSE === '1',
-      /** per-request ceilings forced on every generate call (the app itself stays far below them) */
-      maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 8192),
+      /** per-request ceilings forced on every generate call, set above the largest real use (the designer thinks at HIGH, and thinking counts as output) */
+      maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 32768),
       maxThinkingBudget: int(env.GEMINI_MAX_THINKING_BUDGET, 4096),
     },
     el: {
