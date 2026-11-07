@@ -136,14 +136,22 @@ Devpost: links, video, track selections, and the provenance text.
 | D5 | Generated objects | Gemini writes a JSON shape program. Code builds it, measures grasp width, height and mass, then scales it to fit or rejects it. | Fits in the browser and gives exact measurements. "Gemini proposes, code decides" is the existing trust boundary. Open-source text-to-3D needs a GPU and is research-dependent; it is a stretch goal. |
 | D6 | Theme | Orbital sample-curation glovebox. The deck is light so Robotics-ER can read it; the space backdrop is kept out of the cell camera. | Real-world grounding: NASA JSC curates the Bennu and Ryugu samples in sealed gloveboxes. Dark asteroid samples must stay visible to the camera. |
 | D7 | Keys | The public deploy never ships a key in the bundle. A small Node server holds the keys. | `VITE_GEMINI_API_KEY` is inlined into `dist/` today. |
+| D10 | Guardrail numbers for fabricated samples | Grasp width 15–45 mm (scale to ≤40); height 10–45 mm (scale to ≤40); footprint ≤60 mm; mass ≤100 g (warn above 50, scale to ≤90); spacing max(40, r_a+r_b+10) mm; densities owned by code, by material | From the arm-limits research. Pads are only parallel at 41–45 mm. Fingertips at hover are about 48 mm up. With the STS3215 servos at 5 V and LeRobot capping the gripper at 50% torque, about 90 g of payload remains at rho 0.21. The legacy `create_object` limits are unchanged. |
+| D11 | Grasp axis | Bake the narrowest width onto the object's local +x in the geometry | `pick` closes the jaw along the object's local x at any yaw, as the code map verified. |
+| D12 | ElevenLabs as the coworker's voice | Keep Gemini Live for speech recognition, tools and cell events. Mute its audio and send `outputAudioTranscription` sentences to ElevenLabs as 24 kHz PCM through the existing player. Gemini's own voice stays available as a toggle. | `gemini-3.8-live` outputs audio only (TEXT gets close code 1007). This path is the lowest risk and keeps Gemini essential. |
+| D13 | Gemini keys for the public deploy | `httpOptions.baseUrl` points at a server proxy that injects the key, allows only our model ids, and rate-limits per IP. Live uses `authTokens.create` short-lived tokens (no `lockAdditionalFields`, because of a bug in 2.23). | The research verified both against SDK 2.23. Google disables keys it detects as leaked. |
+| D14 | SDK versions | Stay on @google/genai 2.23.0 and the current @mediapipe/tasks-vision | genai 3.0.0 shipped November 6 and defaults to API v1, where Live and auth_tokens return 404. |
 | D9 | Radial "must be new" rule | The new code alone forms a full Sense→Understand→Act loop: webcam hand sensing, an AI fabricator with measured guardrails, and teleop action. The prior simulator is disclosed as a component. The user should ask Radial on Discord to confirm. | Radial: "Prebuilt or finished projects are not permitted… Software and AI developed for the project must be new", and also "clearly identify… what components existed beforehand". |
 | D8 | Solana, Tiger Data | Skip Solana tonight. Do Tiger Data only if there is time after 20:00. | The user deprioritized Solana. Both add accounts and risk for little gain on the core story. |
 
 ## Not yet specified
 
-- V: the exact ElevenLabs architecture, waiting on research: Gemini text plus ElevenLabs streaming text-to-speech, ElevenLabs Agents with Gemini as the LLM, or ElevenLabs speech-to-text plus text-to-speech.
-- V: the Gemini key path for the public deploy, waiting on research: Live ephemeral tokens, and whether `httpOptions.baseUrl` works for the proxy.
-- G: the maximum payload mass in grams. It waits on the arm-limits research; until then, a placeholder of 150 g.
+- V: Live ephemeral tokens need a smoke test with a real key: is the API version v1alpha or v1beta?
+- Integration fixes for the lead:
+  - `rollForYaw` can exceed the ±2.79 rad Wrist_Roll limit at far-right bearings; wrap it by π.
+  - `IMAGE_COST_USD` should be 0.0336, not 0.02.
+  - Box grasp width uses min(w, d), but the jaw grips w; this is cosmetic.
+- **Eligibility, which the user must ask organizers:** is building on the user's own disclosed EmberHacks simulator allowed? UB Hacking's 2025 FAQ said "you may not submit your past projects". The 2026 FAQ dropped that question, and the 2026 Devpost rules page couldn't be read by a bot.
 - D: the exact Devpost submission form fields, waiting on the event research. The deadline and tracks are confirmed from the hacker guide.
 - The user: will you be back in Buffalo for in-person judging after the 11:30 AM close on Sunday? If not, ask an organizer on Discord whether a remote or video-only judging slot is possible.
 - Phase 4: Vultr. It needs the user's account and payment, and only the user can create those.
