@@ -140,8 +140,8 @@ function BayCamCard() {
       </div>
       <div className="img" ref={host} />
       <div className="row">
-        <span>Gemini's view</span>
-        <span className="num">{ago === null ? '768²' : ago < 2 ? 'sent now' : `sent ${ago}s ago`}</span>
+        <span>{ago === null ? "Gemini's fixed view" : ago < 2 ? 'captured just now' : `captured ${ago} s ago`}</span>
+        <span className="num">768²</span>
       </div>
     </div>
   );

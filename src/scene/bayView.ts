@@ -16,7 +16,7 @@ const MARS_URL = `${import.meta.env.BASE_URL}assets/space/mars_1024.jpg`;
 const ESTOP_TINT = new THREE.Color('#ef4444');
 /** live preview refresh of the bay camera canvas, ms */
 const PREVIEW_MS = 500;
-const VIEW_HOME = { pos: new THREE.Vector3(-0.31, -0.64, 0.4), target: new THREE.Vector3(-0.005, -0.09, 0.07) };
+const VIEW_HOME = { pos: new THREE.Vector3(-0.36, -0.74, 0.44), target: new THREE.Vector3(-0.01, -0.07, 0.09) };
 
 interface TintSlot {
   mat: THREE.MeshStandardMaterial;

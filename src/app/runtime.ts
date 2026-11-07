@@ -25,15 +25,15 @@ import type { BayCore, BayLayout, ResetResult, SafetySignal, SignalSource } from
 import { log, type LogKind } from './bus';
 import { getHandFrame, normalizeHandFrame, setHandFrame } from './hand';
 import { PARAMS } from './params';
-import { DwellMachine, type SafetySnapshot } from './safetyAdapter';
+import { HandSignals, bindSignalsToGate, type SignalSnapshot } from '../safety';
 
 export type InputMode = 'sim' | 'camera';
 
 export interface TickContext {
   /** latest hand frame (camera or simulated), or null when no hand is in view */
   hand: HandFrame | null;
-  /** the hand-signal machine after this tick's sample (phase: idle, debouncing, arming, fired) */
-  safety: SafetySnapshot;
+  /** the hand-signal machine after this tick's sample (phase: idle, debounce, armed, fired) */
+  safety: SignalSnapshot;
   bayState: BayState;
 }
 
@@ -85,7 +85,8 @@ class Runtime {
   readonly core: BayCore;
   readonly bayCamera: BayCameraModel;
   readonly bay: BayApi;
-  private machine = new DwellMachine();
+  private signals = new HandSignals();
+  private lastFeed = -Infinity;
   private hooks: TickHook[] = [];
   private failedHooks = new WeakSet<TickHook>();
   private labelFilter: SafetyLabelFilter = (label) => label;
@@ -121,6 +122,7 @@ class Runtime {
       project: (p) => this.bayCamera.project(p),
       unproject: (yx, z) => this.bayCamera.unproject(yx, z),
     };
+    bindSignalsToGate(this.signals, bay.gate);
     this.telemetry = this.readTelemetry();
     bay.gate.onChange(() => this.publishTelemetry(true));
   }
@@ -145,6 +147,7 @@ class Runtime {
   }
 
   stop(): void {
+    if (!this.running) return;
     this.running = false;
     cancelAnimationFrame(this.raf);
     if (this.interval) clearInterval(this.interval);
@@ -161,7 +164,7 @@ class Runtime {
 
     // 2. tick hooks
     if (this.hooks.length) {
-      const ctx: TickContext = { hand, safety: this.machine.snapshot(), bayState: this.core.gate.state() };
+      const ctx: TickContext = { hand, safety: this.signals.snapshot(), bayState: this.core.gate.state() };
       for (const h of this.hooks) {
         try {
           h(now, dt, ctx);
@@ -196,20 +199,24 @@ class Runtime {
 
   // ---- safety -------------------------------------------------------------------------------
 
-  /** One sample into the dwell machine: the keypad if held, else the latest fresh hand frame. */
+  /**
+   * One sample into the hand-signal machine: the keypad if a key is held, else the latest fresh
+   * hand frame. Fired signals reach the gate through bindSignalsToGate (source 'gesture').
+   */
   private feedSafety(now: number): HandFrame | null {
+    const t = Math.max(now, this.lastFeed); // the machine ignores samples that go back in time
+    this.lastFeed = t;
     const hand = getHandFrame();
     let label: string | null = null;
     let score = 0;
     if (this.simGesture) {
       label = this.simGesture;
       score = 1;
-    } else if (hand && now - hand.t <= HAND_STALE_MS) {
+    } else if (hand && t - hand.t <= HAND_STALE_MS) {
       label = hand.gesture;
       score = hand.gestureScore;
     }
-    const fired = this.machine.feed(this.filterSafetyLabel(label, hand, now), score, now);
-    if (fired) this.applySignal(fired, this.simGesture ? 'keypad' : 'hand');
+    this.signals.feed(this.filterSafetyLabel(label, hand, t), score, t);
     return hand;
   }
 
@@ -226,8 +233,13 @@ class Runtime {
     this.labelFilter = fn ?? ((label) => label);
   }
 
-  safetySnapshot(): SafetySnapshot {
-    return this.machine.snapshot();
+  safetySnapshot(): SignalSnapshot {
+    return this.signals.snapshot();
+  }
+
+  /** The hand-signal machine itself (for listeners such as the voice announcer). */
+  handSignals(): HandSignals {
+    return this.signals;
   }
 
   /**
@@ -242,8 +254,8 @@ class Runtime {
     this.feedSafety(now);
   }
 
-  /** A fired hand signal or a panel button. The gate logs the result; ESTOP aborts every move. */
-  applySignal(signal: SafetySignal, source: SignalSource): void {
+  /** A panel button. The gate logs the result; ESTOP aborts every move. */
+  applySignal(signal: SafetySignal, source: SignalSource = 'panel'): void {
     this.core.gate.apply(signal, source);
   }
 

@@ -1,21 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { TeleopStatus } from '../contracts';
-import type { SafetySignal } from '../app/bayTypes';
 import { getHandFrame } from '../app/hand';
 import { PARAMS } from '../app/params';
 import { getRuntime } from '../app/runtime';
-import { GESTURE_COMMANDS } from '../app/safetyAdapter';
 import { useInputMode } from './hooks';
 import { HAND_LINKS, getHandTracker } from './handTracker';
+import { SIGNAL_COLORS, SIGNAL_KEYS } from './signalKeys';
 import { useSlots } from './slots';
 
-export const SIGNAL_COLORS: Record<SafetySignal, string> = {
-  STOP: '#ef4444',
-  ESTOP: '#ef4444',
-  RESUME: '#22c55e',
-  CYCLE_START: '#38bdf8',
-  SLOW: '#f59e0b',
-};
 
 /** True when a key press is meant for a text field, not for the gesture keypad. */
 export function isTypingTarget(target: EventTarget | null): boolean {
@@ -112,7 +104,7 @@ function CameraView() {
         ctx.fill();
       }
       const snap = rt.safetySnapshot();
-      if (snap.signal && snap.phase !== 'idle') {
+      if (snap.command && snap.phase !== 'idle') {
         const [px, py] = [0, 5, 9, 13, 17].map(P).reduce((acc, [x, y]) => [acc[0] + x / 5, acc[1] + y / 5], [0, 0]);
         const r = Math.max(18, Math.min(w, h) * 0.12);
         ctx.lineWidth = 4;
@@ -120,7 +112,7 @@ function CameraView() {
         ctx.beginPath();
         ctx.arc(px, py, r, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.strokeStyle = SIGNAL_COLORS[snap.signal];
+        ctx.strokeStyle = SIGNAL_COLORS[snap.command];
         ctx.beginPath();
         ctx.arc(px, py, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * snap.progress);
         ctx.stroke();
@@ -197,8 +189,8 @@ function SignalReadout() {
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const s = rt.safetySnapshot();
-      const cmd = s.gesture ? GESTURE_COMMANDS.find((g) => g.gesture === s.gesture) : undefined;
-      const color = s.signal ? SIGNAL_COLORS[s.signal] : '#5d7091';
+      const cmd = s.gesture ? SIGNAL_KEYS.find((g) => g.gesture === s.gesture) : undefined;
+      const color = s.command ? SIGNAL_COLORS[s.command] : '#5d7091';
       if (arc.current) {
         arc.current.style.stroke = color;
         arc.current.style.strokeDashoffset = String(C * (1 - (s.phase === 'idle' ? 0 : s.progress)));
@@ -255,13 +247,13 @@ function Keypad() {
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e.target)) return;
-      const cmd = GESTURE_COMMANDS.find((c) => c.key === e.key);
+      const cmd = SIGNAL_KEYS.find((c) => c.key === e.key);
       if (!cmd) return;
       e.preventDefault();
       hold(cmd.gesture);
     };
     const up = (e: KeyboardEvent) => {
-      const cmd = GESTURE_COMMANDS.find((c) => c.key === e.key);
+      const cmd = SIGNAL_KEYS.find((c) => c.key === e.key);
       if (cmd && heldRef.current === cmd.gesture) hold(null);
     };
     const blur = () => heldRef.current && hold(null);
@@ -282,13 +274,13 @@ function Keypad() {
         <span className="mono">keys 1–5</span>
       </div>
       <div className="keypad" role="group" aria-label="Simulated hand signals">
-        {GESTURE_COMMANDS.map((c) => (
+        {SIGNAL_KEYS.map((c) => (
           <button
             key={c.gesture}
             type="button"
             className="key"
             data-active={held === c.gesture}
-            style={{ ['--k' as string]: SIGNAL_COLORS[c.signal] }}
+            style={{ ['--k' as string]: SIGNAL_COLORS[c.command] }}
             aria-label={`Hold ${c.gestureLabel} to send ${c.commandLabel} (key ${c.key})`}
             aria-pressed={held === c.gesture}
             onPointerDown={(e) => {

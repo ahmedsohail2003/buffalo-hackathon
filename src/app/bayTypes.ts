@@ -2,9 +2,9 @@
 import type { Vec3 } from '../contracts';
 import type { Arm, ArmModel, BayGate, SampleRegistry } from '../core';
 
-/** A command fired by the hand-signal machine, the keypad or the on-screen panel. */
+/** A bay command from the on-screen panel (hand signals reach the gate through src/safety). */
 export type SafetySignal = 'STOP' | 'RESUME' | 'SLOW' | 'CYCLE_START' | 'ESTOP';
-export type SignalSource = 'hand' | 'keypad' | 'panel';
+export type SignalSource = 'panel';
 
 /** Fixed bay geometry the scene draws, in bay-frame metres (z up, arm base at the origin). */
 export interface BayLayout {
