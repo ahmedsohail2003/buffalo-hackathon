@@ -3,6 +3,7 @@
 // with a reason that can be spoken; read-only tools always answer. Every call is a log line.
 // No DOM at import time.
 import type { BayApi, MoveResult, Placement, Sample } from '../contracts';
+import { BAY_FACTS, BAY_FRAME_TEXT, defaultInContainment } from './bayFacts';
 import { errorText, generateJson as defaultGenerateJson, type CallFn } from './client';
 import { pointAt, verifyQuestion } from './er';
 import { logTo, type FabricateFn, type FabricatorDeps, type LogSink } from './types';
@@ -68,7 +69,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'place_sample',
     description:
-      'Put the held sample down on the deck at x_mm, y_mm (bay frame: millimetres, arm base at the origin, the arm reaches toward negative y). Code checks reach and spacing.',
+      `Put the held sample down on the deck at x_mm, y_mm. ${BAY_FRAME_TEXT} Reachable: ${BAY_FACTS.reach.minMm} to ${BAY_FACTS.reach.maxMm} mm from the base, within ${BAY_FACTS.reach.bearingDeg} degrees of straight ahead. Code checks reach and spacing and may refuse.`,
     parameters: {
       type: 'OBJECT',
       properties: { x_mm: MM('deck x in mm'), y_mm: MM('deck y in mm') },
@@ -77,7 +78,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   },
   {
     name: 'place_in_containment',
-    description: 'Put the held sample into the containment bin.',
+    description: `Put the held sample into the containment bin, centred at (${BAY_FACTS.containmentMm[0]}, ${BAY_FACTS.containmentMm[1]}) mm.`,
   },
   {
     name: 'go_home',
@@ -86,7 +87,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'design_sample',
     description:
-      'Fabricate a new sample from a short description (for example "a 30 mm chondrite meteorite fragment"). The fabricator designs it, code measures it and scales it to fit the gripper or refuses it. Optional placement: absolute x_mm/y_mm, or relative_to a sample id, "containment" or "arm", with a direction and distance.',
+      `Fabricate a new sample from a short description (for example "a 30 mm chondrite meteorite fragment"). The fabricator designs it; code measures it and scales it to fit (grip ${BAY_FACTS.grip.minMm}-${BAY_FACTS.grip.maxMm} mm, height ${BAY_FACTS.height.minMm}-${BAY_FACTS.height.maxMm} mm, at most ${BAY_FACTS.massMaxG} g) or refuses it. Optional placement: absolute x_mm/y_mm, or relative_to a sample id, "containment" or "arm", with a direction and distance.`,
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -207,7 +208,7 @@ export function bayStatus(bay: BayApi): ToolResult {
   };
 }
 
-export function describeBay(bay: BayApi, containmentMm?: [number, number]): ToolResult {
+export function describeBay(bay: BayApi, containmentMm: [number, number] = [...BAY_FACTS.containmentMm]): ToolResult {
   const arm = bay.arm.snapshot();
   return {
     ok: true,
@@ -220,8 +221,8 @@ export function describeBay(bay: BayApi, containmentMm?: [number, number]): Tool
       tcp_mm: arm.tcp.map((v) => Math.round(v * 1000)),
     },
     samples: bay.samples.list().map(sampleBrief),
-    ...(containmentMm ? { containment_mm: containmentMm } : {}),
-    frame: 'bay frame, millimetres: arm base at the origin, z up, the arm reaches toward negative y',
+    containment_mm: containmentMm,
+    frame: BAY_FRAME_TEXT,
   };
 }
 
@@ -348,7 +349,7 @@ export async function dispatchTool(
   source: ToolSource,
   ctx: ToolContext = {},
 ): Promise<ToolResult> {
-  const c: ToolContext = { ...defaults, ...ctx };
+  const c: ToolContext = { containmentMm: [...BAY_FACTS.containmentMm], inContainment: defaultInContainment, ...defaults, ...ctx };
   const a = args && typeof args === 'object' ? args : {};
   logTo(c.sink, 'gemini', `[${source}] ${name}(${formatArgs(a)})`);
   let result: ToolResult;

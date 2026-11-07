@@ -4,6 +4,7 @@
 // No DOM.
 import type { BayApi } from '../contracts';
 import { GeminiError, callGemini, errorText, type CallFn, type Content, type Part } from './client';
+import { BAY_FACTS_TEXT } from './bayFacts';
 import { FLASH, type ThinkingLevel } from './models';
 import { TOOL_DECLARATIONS, describeBay, dispatchTool, summarizeResult, type ToolContext, type ToolResult } from './tools';
 import { logTo, type LogSink } from './types';
@@ -11,7 +12,8 @@ import { logTo, type LogSink } from './types';
 export const COWORKER_PROMPT = [
   'You are CAPCOM, the AI coworker in an orbital sample-curation bay. You run a simulated SO-101 robot arm, and only through your tools.',
   'Voice: a calm flight director. Short, plain sentences. Millimetres for distances, grams for mass. No exclamation marks, no filler.',
-  'Each request starts with a [BAY SNAPSHOT] of the sample registry and the arm at that moment.',
+  `Bay facts: ${BAY_FACTS_TEXT}`,
+  'Each request starts with a [BAY SNAPSHOT] of the sample registry and the arm at that moment. Give positions in mm in the bay frame.',
   'Rules:',
   '1. Never say an action worked unless its tool result in this turn says ok: true. When a tool refuses, give its reason in one sentence and the next step if there is one.',
   '2. You cannot stop, resume, slow or reset the bay. The operator owns safety: an open palm stops the arm, a held fist is an emergency stop, and the panel has the same controls. If asked to stop, tell the operator to use them.',

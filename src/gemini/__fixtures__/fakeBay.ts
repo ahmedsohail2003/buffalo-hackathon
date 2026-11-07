@@ -2,7 +2,7 @@
 // oblique camera model so pointing math can be checked exactly. Tests only.
 import type { ArmSnapshot, BayApi, BayState, FrameCapture, MoveResult, Sample, Vec3 } from '../../contracts';
 
-export const FAKE_CONTAINMENT: [number, number] = [0.15, -0.15];
+export const FAKE_CONTAINMENT: [number, number] = [-0.127, -0.127];
 
 export function makeSample(p: Partial<Sample> & { id: string }): Sample {
   const dims = p.dims ?? { w: 0.03, d: 0.03, h: 0.03 };

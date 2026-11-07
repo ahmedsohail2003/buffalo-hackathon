@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LogLine, Sample } from '../contracts';
+import type { LogLine } from '../contracts';
 import { makeFakeBay, makeSample } from './__fixtures__/fakeBay';
 import type { CallFn, CallResult } from './client';
 import { MOVING_TOOLS, TOOL_DECLARATIONS, dispatchTool, liveToolDeclarations, type ToolContext } from './tools';
@@ -66,19 +66,19 @@ describe('tools: gate rules', () => {
 describe('tools: dispatch', () => {
   it('describe_bay reports grip width, height, mass and position in mm', async () => {
     const bay = makeFakeBay({ samples: [bennu, cube] });
-    const d = await dispatchTool(bay, 'describe_bay', {}, 'test', { containmentMm: [150, -150] });
+    const d = await dispatchTool(bay, 'describe_bay', {}, 'test');
     const samples = d.samples as Array<Record<string, unknown>>;
     expect(samples[0]).toMatchObject({ id: 's1', name: 'Bennu fragment', grip_width_mm: 32, height_mm: 28, mass_g: 41.3, x_mm: 50, y_mm: -220, z_mm: 14, held: false });
     expect(samples[1]).toMatchObject({ id: 's2', grip_width_mm: 25, height_mm: 25 });
     expect(samples[1].mass_g).toBeUndefined();
-    expect(d.containment_mm).toEqual([150, -150]);
+    expect(d.containment_mm).toEqual([-127, -127]);
+    expect(String(d.frame)).toContain('y points away from the operator');
     expect(d.arm).toMatchObject({ phase: 'idle', holding: null });
   });
 
   it('pick, place (mm to m), containment and home go through the arm API and log a line each way', async () => {
     const bay = makeFakeBay({ samples: [bennu, cube] });
-    const inContainment = (s: Sample) => Math.hypot(s.pos[0] - 0.15, s.pos[1] + 0.15) < 0.03;
-    const { c, lines } = ctx({ inContainment });
+    const { c, lines } = ctx(); // the default containment check uses the published bin geometry
     expect(await dispatchTool(bay, 'pick_sample', { id: 's1' }, 'coworker', c)).toMatchObject({ ok: true, holding: 's1', sample: 's1' });
     expect(await dispatchTool(bay, 'place_sample', { x_mm: 80, y_mm: '-240' }, 'coworker', c)).toMatchObject({ ok: true, sample: 's1', placed_mm: [80, -240] });
     expect(bay.calls.find((x) => x.fn === 'placeAt')?.args[0]).toEqual([0.08, -0.24]);
