@@ -94,9 +94,12 @@ export function calloutFor(line: LogLine): Callout | null {
   }
 
   const negative = /\bnot\b|fail|refus|reject|miss|abort|outside/.test(t);
-  if (/containment/.test(t) && /secured|in containment|inside containment|into containment|placed|released|stowed/.test(t) && !negative) {
-    const name = quotedName(text);
-    return { text: name ? `${name} secured in containment.` : 'Sample secured in containment.', priority: 'normal', key: 'containment' };
+  // Containment only from the arm's own release line (code decided where the sample rests), never
+  // from free text: Gemini's tool arguments and camera observations are logged as kind 'gemini'.
+  const released = line.kind === 'info' ? text.match(/^released (.+) on the containment$/) : null;
+  if (released) {
+    const name = released[1].trim().slice(0, 40);
+    return { text: `${name || 'Sample'} secured in containment.`, priority: 'normal', key: 'containment' };
   }
   if (line.kind === 'fabricator' && /fabricat|materiali[sz]/.test(t) && !negative) {
     return { text: fabricatorSummary(text), priority: 'normal', key: `fab:${t}` };

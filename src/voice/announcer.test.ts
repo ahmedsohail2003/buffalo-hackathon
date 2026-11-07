@@ -43,10 +43,8 @@ describe('announcer rules', () => {
     expect(calloutFor(line('safety', 'STOP (open palm)'))?.text).toBe('All stop. Arm holding.');
     expect(calloutFor(line('safety', 'RESUME (thumbs up)'))?.text).toBe('Resuming. Arm is live.');
     expect(calloutFor(line('safety', 'SLOW mode'))?.text).toBe('Slow mode. Half speed.');
-    expect(calloutFor(line('teleop', '"Bennu fragment" secured in containment'))?.text).toBe('Bennu fragment secured in containment.');
-    expect(calloutFor(line('gemini', '[coworker] place_in_containment -> ok, s1 released over containment (registry: inside)'))?.text).toBe(
-      'Sample secured in containment.',
-    );
+    expect(calloutFor(line('info', 'released Bennu fragment on the containment'))?.text).toBe('Bennu fragment secured in containment.');
+    expect(calloutFor(line('gemini', '[coworker] place_in_containment -> ok, s1 released over containment (registry: inside)'))).toBeNull();
     expect(calloutFor(line('gemini', '[coworker] place_in_containment -> ok, s1 released over containment (registry: NOT inside)'))).toBeNull();
     expect(calloutFor(line('reject', 'Fabricator: too heavy at 140 g; the limit is 100 g. Try a smaller one.'))?.text).toBe(
       'Negative. too heavy at 140 g; the limit is 100 g.',
@@ -55,6 +53,17 @@ describe('announcer rules', () => {
     expect(calloutFor(line('info', '[CALLOUT] Welcome to Curation Bay 2.'))?.text).toBe('Welcome to Curation Bay 2.');
     expect(calloutFor(line('voice', 'Emergency stop. Arm locked.'))).toBeNull();
     expect(calloutFor(line('info', 'Camera ready'))).toBeNull();
+  });
+
+  it('never announces containment from Gemini text or free text, only from the arm release line', () => {
+    expect(calloutFor(line('gemini', '[coworker] check_bay(question: "Is the Bennu fragment in containment?")'))).toBeNull();
+    expect(
+      calloutFor(line('gemini', '[coworker] check_bay -> yes (registry decides: no) - camera disagrees: The Bennu fragment is placed in containment.')),
+    ).toBeNull();
+    expect(calloutFor(line('info', 'released Containment canister on the deck'))).toBeNull();
+    expect(calloutFor(line('info', 'released Bennu fragment on the sample below'))).toBeNull();
+    expect(calloutFor(line('teleop', 'Sample placed in containment'))).toBeNull();
+    expect(calloutFor(line('info', 'released Containment canister on the containment'))?.text).toBe('Containment canister secured in containment.');
   });
 
   it('summarises a fabricated sample from the measured numbers', () => {
@@ -73,7 +82,7 @@ describe('announcer rate limit', () => {
     advance(500);
     a.handle(line('fabricator', 'Fabricated "Eros chip": grip 30 mm'));
     advance(500);
-    a.handle(line('teleop', '"Eros chip" secured in containment'));
+    a.handle(line('info', 'released Eros chip on the containment'));
     expect(said).toHaveLength(1);
     advance(1499);
     expect(said).toHaveLength(1);
@@ -87,7 +96,7 @@ describe('announcer rate limit', () => {
     const { a, said, advance, cancels } = rig();
     a.handle(line('safety', 'RESUME'));
     advance(300);
-    a.handle(line('teleop', '"Itokawa" secured in containment'));
+    a.handle(line('info', 'released Itokawa on the containment'));
     advance(300);
     a.handle(line('safety', 'E-STOP'));
     expect(cancels()).toBe(1);
@@ -104,13 +113,13 @@ describe('announcer rate limit', () => {
 
   it('says a repeated callout once inside the dedupe window', () => {
     const { a, said, advance } = rig();
-    a.handle(line('teleop', 'Sample placed in containment'));
+    a.handle(line('info', 'released Sample on the containment'));
     advance(3000);
     a.handle(line('gemini', '[live] place_in_containment -> ok, s2 released over containment'));
     advance(3000);
     expect(said).toEqual(['Sample secured in containment.']);
     advance(9000);
-    a.handle(line('teleop', 'Sample placed in containment'));
+    a.handle(line('info', 'released Sample on the containment'));
     expect(said).toHaveLength(2);
   });
 });
