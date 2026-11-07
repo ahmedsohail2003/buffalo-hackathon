@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EL_KEY, GEMINI_KEY, startFakeUpstream } from './fake-upstream.mjs';
-import { createServer, loadConfig, makeLimiter } from './index.mjs';
+import { createServer, loadConfig, makeBudget, makeLimiter } from './index.mjs';
 
 let upstream;
 let dist;
@@ -247,6 +247,55 @@ describe('Gemini proxy', () => {
 
     expect((await post(`${base}/api/gemini/live-token`, { model: 'gemini-3.8-flash', config })).status).toBe(403);
     expect((await post(`${base}/api/gemini/live-token`, { model: 'gemini-3.8-live', config: { responseModalities: ['TEXT'] } })).status).toBe(400);
+  });
+});
+
+describe('server-wide budgets (all clients together)', () => {
+  it('TTS is counted in characters across IPs and answers a 429 the speaker survives', async () => {
+    expect(loadConfig({}).limits.tts).toBe(30);
+    const base = await start({ ELEVENLABS_API_KEY: EL_KEY, TRUST_PROXY: '1', BUDGET_TTS_CHARS_PER_MIN: '30' });
+    const before = upstream.seen.filter((s) => s.path.startsWith('/v1/text-to-speech/')).length;
+    const a = await post(`${base}/api/tts`, { text: 'Twenty characters ok' }, { 'x-forwarded-for': '198.51.100.1' });
+    expect(a.status).toBe(200);
+    await a.arrayBuffer();
+    // a different IP has its own per-IP allowance, but the server's character budget is spent
+    const b = await post(`${base}/api/tts`, { text: 'Another twenty chars' }, { 'x-forwarded-for': '198.51.100.2' });
+    expect(b.status).toBe(429);
+    expect(Number(b.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(await b.json()).toMatchObject({ error: 'budget_exhausted', upstream: 'elevenlabs' });
+    // a short line still fits
+    const c = await post(`${base}/api/tts`, { text: 'Copy.' }, { 'x-forwarded-for': '198.51.100.3' });
+    expect(c.status).toBe(200);
+    await c.arrayBuffer();
+    expect(upstream.seen.filter((s) => s.path.startsWith('/v1/text-to-speech/')).length - before).toBe(2);
+  });
+
+  it('Gemini requests and Live tokens share one server-wide request budget', async () => {
+    const base = await start({ GEMINI_API_KEY: GEMINI_KEY, TRUST_PROXY: '1', BUDGET_GEMINI_PER_MIN: '2' });
+    const url = `${base}/api/gemini/v1beta/models/gemini-3.8-flash:generateContent`;
+    const body = { contents: [{ parts: [{ text: 'hi' }] }] };
+    expect((await post(url, body, { 'x-forwarded-for': '203.0.113.1' })).status).toBe(200);
+    expect((await post(`${base}/api/gemini/live-token`, { model: 'gemini-3.8-live', config: {} }, { 'x-forwarded-for': '203.0.113.2' })).status).toBe(200);
+    const over = await post(url, body, { 'x-forwarded-for': '203.0.113.3' });
+    expect(over.status).toBe(429);
+    expect(await over.json()).toMatchObject({ error: 'budget_exhausted', upstream: 'gemini' });
+    const tok = await post(`${base}/api/gemini/live-token`, { model: 'gemini-3.8-live', config: {} }, { 'x-forwarded-for': '203.0.113.4' });
+    expect(tok.status).toBe(429);
+  });
+
+  it('a budget opens again after its window; the daily window outlasts the minute one; refusals spend nothing', () => {
+    let now = 0;
+    const spend = makeBudget(10, 25, () => now);
+    expect(spend(6)).toBe(0);
+    expect(spend(5)).toBeGreaterThan(0); // 11 > 10 this minute
+    expect(spend(4)).toBe(0); // the refused 5 was not counted
+    now = 60_000;
+    expect(spend(10)).toBe(0); // 20 today
+    now = 120_000;
+    const wait = spend(6); // 26 > 25 today
+    expect(wait).toBeGreaterThan(60);
+    now = 86_400_000;
+    expect(spend(6)).toBe(0);
   });
 });
 

@@ -61,8 +61,18 @@ export function loadConfig(env = process.env) {
       model: env.ELEVENLABS_MODEL || 'eleven_flash_v2_5',
       voices: { mission, coworker: env.ELEVENLABS_VOICE_COWORKER || mission },
     },
-    /** requests per IP per minute */
-    limits: { tts: int(env.RATE_TTS, 90), gemini: int(env.RATE_GEMINI, 40), token: int(env.RATE_LIVE_TOKEN, 10) },
+    /**
+     * requests per IP per minute. One browser speaks one TTS request per sentence: the announcer
+     * at most 24 a minute (one per 2.5 s) plus Live replies, so 30 covers a busy demo.
+     */
+    limits: { tts: int(env.RATE_TTS, 30), gemini: int(env.RATE_GEMINI, 40), token: int(env.RATE_LIVE_TOKEN, 10) },
+    /** server-wide budgets, all clients together: TTS in characters, Gemini in requests (Live tokens included) */
+    budgets: {
+      ttsCharsPerMin: int(env.BUDGET_TTS_CHARS_PER_MIN, 6000),
+      ttsCharsPerDay: int(env.BUDGET_TTS_CHARS_PER_DAY, 100_000),
+      geminiPerMin: int(env.BUDGET_GEMINI_PER_MIN, 120),
+      geminiPerDay: int(env.BUDGET_GEMINI_PER_DAY, 5000),
+    },
     /**
      * request body caps, bytes. The largest request the app sends is one 768 x 768 bay-camera JPEG
      * as base64 (about 180 KB) plus a short prompt, so 1 MiB leaves a wide margin.
@@ -146,6 +156,41 @@ export function makeLimiter(perMinute, now = Date.now) {
   };
 }
 
+/**
+ * A server-wide allowance over a fixed minute and a fixed day, shared by every client. spend(amount)
+ * returns 0 and records the amount, or the seconds until it would fit (and records nothing).
+ */
+export function makeBudget(perMinute, perDay, now = Date.now) {
+  const windows = [
+    { len: 60_000, max: perMinute, start: -Infinity, used: 0 },
+    { len: 86_400_000, max: perDay, start: -Infinity, used: 0 },
+  ];
+  return (amount = 1) => {
+    const t = now();
+    let wait = 0;
+    for (const w of windows) {
+      if (t - w.start >= w.len) {
+        w.start = t;
+        w.used = 0;
+      }
+      if (w.used + amount > w.max) wait = Math.max(wait, Math.max(1, Math.ceil((w.start + w.len - t) / 1000)));
+    }
+    if (wait) return wait;
+    for (const w of windows) w.used += amount;
+    return 0;
+  };
+}
+
+/** The server as a whole is over its budget for this upstream: the browser drops this one request. */
+function sendOverBudget(res, upstream, wait) {
+  return sendJson(
+    res,
+    429,
+    { error: 'budget_exhausted', upstream, retry_after_s: wait, message: `The server has used its ${upstream} allowance for now.` },
+    { 'retry-after': String(wait) },
+  );
+}
+
 function clientIp(req, trustProxy) {
   if (trustProxy) {
     const xff = req.headers['x-forwarded-for'];
@@ -210,6 +255,8 @@ async function handleTts(req, res, cfg, ctx) {
   const body = await readJson(req, cfg.caps.tts);
   const text = typeof body.text === 'string' ? body.text.trim().slice(0, 600) : '';
   if (!text) return sendJson(res, 400, { error: 'text_required' });
+  const over = ctx.budget.tts(text.length);
+  if (over) return sendOverBudget(res, 'elevenlabs', over);
   const voice = body.voice === 'coworker' ? 'coworker' : 'mission';
   const previous = typeof body.previous_text === 'string' ? body.previous_text.slice(-300) : '';
 
@@ -312,6 +359,8 @@ async function handleGemini(req, res, cfg, ctx, url) {
   if (!cfg.gemini.models.includes(model)) return sendJson(res, 403, { error: 'model_not_allowed', model, allowed: cfg.gemini.models });
   const wait = ctx.limit.gemini(ctx.ip);
   if (wait) return sendJson(res, 429, { error: 'rate_limited', retry_after_s: wait }, { 'retry-after': String(wait) });
+  const over = ctx.budget.gemini(1);
+  if (over) return sendOverBudget(res, 'gemini', over);
 
   let body = await readBody(req, cfg.caps.gemini);
   if (method !== 'countTokens') {
@@ -365,6 +414,8 @@ async function handleLiveToken(req, res, cfg, ctx) {
   const body = await readJson(req, cfg.caps.token);
   const model = typeof body.model === 'string' && body.model ? body.model.replace(/^models\//, '') : cfg.gemini.liveModel;
   if (model !== cfg.gemini.liveModel) return sendJson(res, 403, { error: 'model_not_allowed', model, allowed: [cfg.gemini.liveModel] });
+  const over = ctx.budget.gemini(1);
+  if (over) return sendOverBudget(res, 'gemini', over);
   const config = body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? { ...body.config } : {};
   delete config.httpOptions;
   delete config.abortSignal;
@@ -481,6 +532,10 @@ export function createServer(cfg = loadConfig(), deps = {}) {
     gemini: makeLimiter(cfg.limits.gemini),
     token: makeLimiter(cfg.limits.token),
   };
+  const budget = {
+    tts: makeBudget(cfg.budgets.ttsCharsPerMin, cfg.budgets.ttsCharsPerDay),
+    gemini: makeBudget(cfg.budgets.geminiPerMin, cfg.budgets.geminiPerDay),
+  };
   const redact = redactor(cfg);
   const mintToken = deps.mintToken ?? ((args) => mintWithSdk(cfg, args));
   const log = deps.log ?? ((line) => console.log(line));
@@ -500,7 +555,7 @@ export function createServer(cfg = loadConfig(), deps = {}) {
       // path only: never query strings, headers or bodies
       res.on('finish', () => log(`${req.method} ${url.pathname} ${res.statusCode} ${Date.now() - t0}ms`));
     }
-    const ctx = { ip: clientIp(req, cfg.trustProxy), limit, redact, mintToken };
+    const ctx = { ip: clientIp(req, cfg.trustProxy), limit, budget, redact, mintToken };
     const isApi = url.pathname === '/api' || url.pathname.startsWith('/api/');
     if (isApi && req.method === 'POST' && cfg.allowedOrigins.length) {
       const origin = req.headers.origin;
