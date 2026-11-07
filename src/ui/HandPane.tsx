@@ -73,6 +73,8 @@ function CameraView() {
       ctx.clearRect(0, 0, w, h);
       const f = getHandFrame();
       const fresh = f && performance.now() - f.t < 400 && f.landmarks.length >= 21;
+      const box = host.current;
+      if (box && box.dataset.hand !== String(!!fresh)) box.dataset.hand = String(!!fresh);
       const label = hud.current;
       if (label) label.textContent = fresh && f.gesture ? `${f.gesture.replace('_', ' ')} ${(f.gestureScore * 100).toFixed(0)}%` : fresh ? 'hand · no signal' : 'no hand';
       if (!fresh) return;

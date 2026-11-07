@@ -375,6 +375,9 @@ button {
   margin: 0;
   max-width: 230px;
 }
+.cam[data-hand='true'] .cam-empty {
+  display: none;
+}
 .cam-hud {
   position: absolute;
   left: 8px;
@@ -1128,7 +1131,10 @@ button {
   grid-template-columns: 1fr 1fr;
 }
 .app.present .ledger-grid .cell {
-  padding: 6px 12px;
+  padding: 4px 12px;
+}
+.app.present .ledger-grid .v {
+  font-size: 14px;
 }
 .app.present .ledger-foot {
   display: none;
