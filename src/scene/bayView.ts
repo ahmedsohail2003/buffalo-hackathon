@@ -14,7 +14,7 @@ import { SampleLayer } from './samples';
 
 const MARS_URL = `${import.meta.env.BASE_URL}assets/space/mars_1024.jpg`;
 const ESTOP_TINT = new THREE.Color('#ef4444');
-const VIEW_HOME = { pos: new THREE.Vector3(-0.44, -1.0, 0.5), target: new THREE.Vector3(0.03, -0.12, 0.07) };
+const VIEW_HOME = { pos: new THREE.Vector3(-0.36, -0.88, 0.47), target: new THREE.Vector3(0.03, -0.1, 0.08) };
 
 interface TintSlot {
   mat: THREE.MeshStandardMaterial;
@@ -146,7 +146,7 @@ export class BayView implements SceneLink {
     this.bayRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.bayRenderer.setPixelRatio(1);
     this.bayRenderer.setSize(BAY_CAPTURE_SIZE, BAY_CAPTURE_SIZE, false);
-    this.bayRenderer.setClearColor('#3a414c', 1);
+    this.bayRenderer.setClearColor('#2f3540', 1);
     this.bayRenderer.toneMapping = THREE.NeutralToneMapping;
     this.bayRenderer.toneMappingExposure = 1.0;
     this.bayRenderer.shadowMap.enabled = true;

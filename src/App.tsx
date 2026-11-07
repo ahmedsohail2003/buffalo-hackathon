@@ -1,9 +1,23 @@
-// Placeholder shell; the UI builder replaces it with the mission-control layout (docs/ARCHITECTURE.md).
+import { useEffect } from 'react';
+import { PARAMS } from './app/params';
+import { getRuntime } from './app/runtime';
+import { BayPane } from './ui/BayPane';
+import { HandPane } from './ui/HandPane';
+import { LogStrip } from './ui/LogStrip';
+import { MissionPane } from './ui/MissionPane';
+import { TopBar } from './ui/TopBar';
+
 export default function App() {
+  useEffect(() => {
+    getRuntime().start();
+  }, []);
   return (
-    <main style={{ fontFamily: 'system-ui', color: '#e2e8f0', background: '#05070d', minHeight: '100vh', padding: 24 }}>
-      <h1>STARHAND</h1>
-      <p>Orbital sample-curation bay — under construction at UB Hacking 2026.</p>
-    </main>
+    <div className={`app${PARAMS.present ? ' present' : ''}`}>
+      <TopBar />
+      <HandPane />
+      <BayPane />
+      <MissionPane />
+      <LogStrip />
+    </div>
   );
 }

@@ -65,8 +65,9 @@ interface Look {
 function buildLook(s: Sample): Look {
   const reg = buildRegisteredSample(s);
   if (reg) {
-    const params: THREE.MeshStandardMaterialParameters = { color: s.color, roughness: 0.88, metalness: 0.05, ...(reg.material ?? {}) };
-    if (reg.geometry.getAttribute('color') && reg.material?.vertexColors === undefined) params.vertexColors = true;
+    const vertexColors = reg.material?.vertexColors ?? !!reg.geometry.getAttribute('color');
+    // vertex colours carry the part colours: keep the base colour white so they are not tinted
+    const params: THREE.MeshStandardMaterialParameters = { color: vertexColors ? '#ffffff' : s.color, roughness: 0.88, metalness: 0.05, ...(reg.material ?? {}), vertexColors };
     return { geometry: reg.geometry, material: new THREE.MeshStandardMaterial(params), ownsGeometry: false, placeholder: false };
   }
   if (s.kind === 'mesh') {

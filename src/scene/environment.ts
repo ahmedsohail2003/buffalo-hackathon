@@ -159,7 +159,7 @@ function makeEnclosure(layout: BayLayout): THREE.Group {
   const y0 = cy - S / 2;
   const y1 = cy + S / 2;
 
-  const glass = new THREE.MeshStandardMaterial({ color: '#a5d8ff', transparent: true, opacity: 0.05, roughness: 0.08, metalness: 0, depthWrite: false, side: THREE.DoubleSide });
+  const glass = new THREE.MeshStandardMaterial({ color: '#7dd3fc', transparent: true, opacity: 0.085, roughness: 0.08, metalness: 0, depthWrite: false, side: THREE.DoubleSide });
   const wall = (w: number, h: number) => new THREE.Mesh(new THREE.PlaneGeometry(w, h), glass);
   const back = wall(S, H);
   back.rotation.x = Math.PI / 2;
@@ -189,7 +189,7 @@ function makeEnclosure(layout: BayLayout): THREE.Group {
   seg([x1, y1, 0.002], [x1, y0, 0.002]);
   const edgeGeom = new THREE.BufferGeometry();
   edgeGeom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  g.add(new THREE.LineSegments(edgeGeom, new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.55 })));
+  g.add(new THREE.LineSegments(edgeGeom, new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.85 })));
 
   // soft cyan light strip along the top of the back wall
   const strip = new THREE.Mesh(new THREE.BoxGeometry(S, 0.006, 0.01), new THREE.MeshBasicMaterial({ color: '#7dd3fc', transparent: true, opacity: 0.5 }));
@@ -197,17 +197,17 @@ function makeEnclosure(layout: BayLayout): THREE.Group {
   g.add(strip);
 
   // two glove ports in the back wall
-  const ringMat = new THREE.MeshStandardMaterial({ color: '#1e293b', metalness: 0.7, roughness: 0.35 });
+  const ringMat = new THREE.MeshStandardMaterial({ color: '#9aa7b8', metalness: 0.85, roughness: 0.3 });
   const glowMat = new THREE.MeshBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.65 });
-  const membrane = new THREE.MeshStandardMaterial({ color: '#0b1220', transparent: true, opacity: 0.55, roughness: 0.9, side: THREE.DoubleSide, depthWrite: false });
-  for (const dx of [-0.17, 0.17]) {
+  const membrane = new THREE.MeshStandardMaterial({ color: '#1e3a5f', transparent: true, opacity: 0.22, roughness: 0.6, side: THREE.DoubleSide, depthWrite: false });
+  for (const dx of [-0.2, 0.2]) {
     const port = new THREE.Group();
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.011, 16, 64), ringMat);
-    const glow = new THREE.Mesh(new THREE.TorusGeometry(0.062, 0.0025, 8, 64), glowMat);
-    const skin = new THREE.Mesh(new THREE.CircleGeometry(0.064, 48), membrane);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.056, 0.008, 16, 64), ringMat);
+    const glow = new THREE.Mesh(new THREE.TorusGeometry(0.046, 0.0018, 8, 64), glowMat);
+    const skin = new THREE.Mesh(new THREE.CircleGeometry(0.048, 48), membrane);
     port.add(ring, glow, skin);
     port.rotation.x = Math.PI / 2;
-    port.position.set(cx + dx, y1 - 0.004, 0.27);
+    port.position.set(cx + dx, y1 - 0.004, 0.2);
     g.add(port);
   }
 
@@ -228,7 +228,7 @@ export interface SpaceEnvironment {
 export function buildSpaceEnvironment(layout: BayLayout, marsUrl: string): SpaceEnvironment {
   const group = new THREE.Group();
   group.name = 'space-environment';
-  const sunDir = new THREE.Vector3(1, 0.15, 0.35).normalize();
+  const sunDir = new THREE.Vector3(-0.95, -0.25, 0.3).normalize();
 
   group.add(makeNebula(9));
   group.add(makeStarfield(4500, 8, 7));
@@ -236,8 +236,8 @@ export function buildSpaceEnvironment(layout: BayLayout, marsUrl: string): Space
   const tex = new THREE.TextureLoader().load(marsUrl);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
-  const mars = makePlanet(tex, 1.5, sunDir);
-  mars.position.set(2.6, 5.4, 1.35);
+  const mars = makePlanet(tex, 1.2, sunDir);
+  mars.position.set(4.0, 4.2, -0.75);
   group.add(mars);
 
   group.add(makeEnclosure(layout));

@@ -10,7 +10,7 @@ export const MOCK_LAYOUT: BayLayout = {
   deckSize: 1.2,
   deckCenter: [0, -0.1],
   containment: { x: 0.17, y: -0.19, innerW: 0.08, innerD: 0.08, wallH: 0.025, wallT: 0.004 },
-  bayCamera: { pos: [0, -0.6, 0.46], target: [0, -0.14, 0.03], fovDeg: 40 },
+  bayCamera: { pos: [0.03, -0.64, 0.56], target: [0.03, -0.12, 0.02], fovDeg: 42 },
 };
 
 const Z_HOVER = 0.09;
