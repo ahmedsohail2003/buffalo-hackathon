@@ -86,6 +86,26 @@ describe('Robotics-ER verify and grasp check', () => {
     expect(r.registry).toEqual([{ id: 's3', name: 'Itokawa', held: false, x_mm: 40, y_mm: -250, in_containment: true }]);
   });
 
+  it('the registry decides only "is X in the bin"; other bin questions are the camera\'s, with in_containment as data', async () => {
+    const bay = makeFakeBay({ samples: [itokawa] });
+    for (const question of [
+      'Is the Itokawa outside the containment bin?',
+      'Is the Itokawa still on the deck, out of the bin?',
+      'Is the Itokawa not in the containment bin?',
+      'Is the Itokawa to the right of the containment bin?',
+      'Did the Itokawa fall out of the bin?',
+    ]) {
+      const { call } = replies('{"answer":"yes","observation":"It sits on the grid beside the bin."}');
+      const r = await verifyQuestion(bay, question, { call, inContainment: () => false });
+      expect(r).toMatchObject({ ok: true, answer: 'yes', decided_by: 'camera' });
+      expect(r).not.toHaveProperty('agree');
+      expect(r.registry).toEqual([expect.objectContaining({ id: 's3', in_containment: false })]);
+    }
+    const { call } = replies('{"answer":"yes","observation":"It is in the bin."}');
+    const r = await verifyQuestion(bay, 'Is the Itokawa in containment?', { call, inContainment: () => false });
+    expect(r).toMatchObject({ ok: false, answer: 'yes', decided_by: 'code', agree: false });
+  });
+
   it('a question code cannot answer is decided by the camera', async () => {
     const bay = makeFakeBay({ samples: [itokawa] });
     const { call } = replies('{"answer":"yes","observation":"Two samples sit on the grid."}');
