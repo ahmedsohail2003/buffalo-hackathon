@@ -1,4 +1,4 @@
-// The typed coworker: Flash with function calling, at most 6 model rounds per request. It moves
+// The typed coworker: function calling on the fast model, at most 6 rounds per request. It moves
 // the arm only through the tools, never claims success without a tool result, and cannot stop
 // or resume the bay (hand signals and the panel own safety). An emergency stop cancels the run.
 // No DOM.

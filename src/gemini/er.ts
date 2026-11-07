@@ -1,4 +1,4 @@
-// Gemini Robotics-ER on the fixed bay camera: point at things, answer yes/no questions, and check
+// Embodied reasoning on the fixed bay camera: point at things, answer yes/no questions, and check
 // a new sample. Gemini sees; code decides: every answer is set against the sample registry, and
 // where the registry can answer (positions, containment), the registry wins.
 // No DOM; the frame comes from bay.capture().
@@ -6,7 +6,7 @@ import type { BayApi, FrameCapture, Sample, Vec3 } from '../contracts';
 import { callGemini, type CallFn, statusOf } from './client';
 import { ROBOTICS_ER, type Purpose, type ThinkingLevel } from './models';
 
-/** Robotics-ER pointing format: [{ point: [y, x], label }] with y, x normalized 0-1000. */
+/** Pointing format: [{ point: [y, x], label }] with y, x normalized 0-1000. */
 export const POINT_SCHEMA = {
   type: 'array',
   maxItems: 5,
@@ -107,7 +107,7 @@ export interface GraspCheckResult {
   schema?: boolean;
 }
 
-// ---- One Robotics-ER request ----------------------------------------------------------------
+// ---- One embodied-reasoning request ---------------------------------------------------------
 
 export interface ErAnswer {
   json: unknown;
@@ -305,7 +305,7 @@ function registryAnswer(question: string, mentioned: Sample[], deps: ErDeps): bo
   return deps.inContainment(mentioned[0]);
 }
 
-/** Ask Robotics-ER a yes/no question about a fresh bay frame. */
+/** Ask the bay-camera model a yes/no question about a fresh frame. */
 export async function verifyQuestion(bay: BayApi, question: string, deps: ErDeps = {}): Promise<VerifyResult> {
   const prompt =
     'You are the inspection camera of an orbital sample-curation bay: a light deck with a 1 cm grid, ' +

@@ -27,7 +27,7 @@ export type FabricateResult =
   | { ok: true; sample: Sample; say: string }
   | { ok: false; code: string; reason: string; suggestion?: string };
 
-/** What the fabricator needs from this layer: Flash with a JSON schema (see client.ts generateJson). */
+/** What the fabricator needs from this layer: the fast model with a JSON schema (client.ts generateJson). */
 export interface FabricatorDeps {
   generateJson: (a: { system: string; prompt: string; schema: object; signal?: AbortSignal }) => Promise<{ text: string; latencyMs: number }>;
 }

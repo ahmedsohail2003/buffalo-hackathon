@@ -379,7 +379,7 @@ export class GeminiClient {
 
 export function buildConfig(req: Pick<CallRequest, 'model' | 'level' | 'purpose' | 'config'>): Record<string, unknown> {
   const config: Record<string, unknown> = { ...(req.config ?? {}) };
-  // Gemini 3.6 and later ignore temperature (and will reject it): never send it.
+  // Current Gemini models ignore temperature (and will reject it): never send it.
   delete config.temperature;
   delete config.abortSignal;
   const info = MODEL_INFO[req.model];
@@ -542,7 +542,7 @@ export function isSchemaError(err: unknown): boolean {
 }
 
 /**
- * Flash with a JSON schema, thinking LOW, purpose 'design'. On a 400 that names the schema it
+ * The fast model with a JSON schema, thinking LOW, purpose 'design'. On a 400 that names the schema it
  * retries once without the schema (the prompt still asks for JSON). latencyMs covers both tries.
  */
 export function createGenerateJson(call: CallFn, model: string = FLASH): GenerateJsonFn {

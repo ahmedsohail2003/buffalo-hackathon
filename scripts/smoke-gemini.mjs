@@ -3,8 +3,8 @@
 //   node scripts/smoke-gemini.mjs --server https://your.host          through the STARHAND server
 // Add --no-live to skip the Live checks.
 //
-// Checks: Flash text with a thinking level; a function-call round trip (thought signatures go
-// back); a JSON schema; Robotics-ER pointing on a generated test image; a Live token and a Live
+// Checks: fast-model text with a thinking level; a function-call round trip (thought signatures
+// go back); a JSON schema; embodied-reasoning pointing on a generated test image; a Live token and a Live
 // answer on v1alpha and on v1beta, sending text as client content and as realtime input. The
 // summary says which Live API version and which text path work, for src/gemini/live.ts.
 import { deflateSync } from 'node:zlib';
@@ -82,7 +82,7 @@ await step('Flash JSON schema', async () => {
   return JSON.stringify(JSON.parse(r.text ?? ''));
 });
 
-// ---- Robotics-ER pointing on a generated image ---------------------------------------------
+// ---- Embodied-reasoning pointing on a generated image ---------------------------------------
 
 function crc32(buf) {
   let crc = 0xffffffff;
