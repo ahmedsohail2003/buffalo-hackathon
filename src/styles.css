@@ -1,4 +1,48 @@
 /* STARHAND mission-control console. Calm, dark, high-legibility; colour carries state only. */
+/* Self-hosted Latin subsets of Inter and JetBrains Mono (licences in public/fonts/FONTS-LICENSE.txt). */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-Regular.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500 600;
+  font-display: swap;
+  src: url('/fonts/Inter-SemiBold.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 650 700;
+  font-display: swap;
+  src: url('/fonts/Inter-Bold.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 750 900;
+  font-display: swap;
+  src: url('/fonts/Inter-ExtraBold.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-Regular.subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-Medium.subset.woff2') format('woff2');
+}
+
 :root {
   --bg: #05070d;
   --panel: #0b1220;
