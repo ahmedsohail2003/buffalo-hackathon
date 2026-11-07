@@ -14,6 +14,12 @@ Built at UB Hacking 2026 (November 7–8). Every line of code was written during
 
 > **Status:** under construction during the hackathon. The arm is a kinematic simulation, not a real robot.
 
+![STARHAND: the SO-101 in the curation bay with NASA's Bennu and Itokawa shape models, the Fabricator, and the simulated hand pad](docs/img/starhand-bay.jpg)
+
+| Hand teleop: carrying a sample to containment | What Gemini Robotics-ER sees (fixed bay camera) |
+| --- | --- |
+| ![Teleop carrying the sample cube over the containment bin](docs/img/starhand-teleop-carry.jpg) | ![The 768 × 768 bay camera frame: light deck with a 1 cm grid, samples, containment and the arm](docs/img/starhand-bay-camera.jpg) |
+
 ## How it works
 
 ### Hand teleop: you say where and when, the arm's checked code does the rest
