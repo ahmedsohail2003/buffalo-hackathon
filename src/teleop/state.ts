@@ -46,3 +46,13 @@ export function latestHandFrame(): HandFrame | null {
 export function shouldSuppressFist(frame: HandFrame | null, nowMs: number): boolean {
   return fistMask.suppress(frame?.gesture ?? null, frame?.landmarks, isTeleopEnabled(), nowMs);
 }
+
+/**
+ * The safety label filter: the label to feed the gesture machine for this sample. The mask is
+ * consulted on EVERY sample (so its pinch timer resets when the pose ends), and only a
+ * Closed_Fist label is ever withheld.
+ */
+export function fistMaskFilter(label: string | null, frame: HandFrame | null, nowMs: number): string | null {
+  const hide = shouldSuppressFist(frame, nowMs);
+  return label === 'Closed_Fist' && hide ? null : label;
+}

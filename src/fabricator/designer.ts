@@ -62,21 +62,43 @@ const NOT_DESIGN = new Set(['TOO_MANY', 'NO_FREE_SPOT', 'TOO_CLOSE_TO', 'ON_CONT
 
 export type Designed = Placed & { attempts: number; latencyMs: number; source: 'gemini' | 'preset' | 'nasa' };
 
+const ABORTED: Rejection = { ok: false, code: 'ABORTED', reason: 'the request was cancelled, so no sample was made' };
+
+/** A cancelled model call (GeminiError 'ABORTED' or a DOM AbortError). */
+function isAbort(e: unknown): boolean {
+  return !!e && typeof e === 'object' && ((e as { code?: unknown }).code === 'ABORTED' || (e as { name?: unknown }).name === 'AbortError');
+}
+
+/** Why nothing may be placed now: the request was cancelled, or the bay is stopped or E-stopped. */
+function halted(bay: BayApi, signal?: AbortSignal): Rejection | null {
+  if (signal?.aborted) return { ...ABORTED };
+  const s = bay.gate.state();
+  if (s === 'ESTOPPED') return { ok: false, code: 'BAY_ESTOPPED', reason: 'emergency stop is active, so the sample was not placed' };
+  if (s === 'STOPPED') return { ok: false, code: 'BAY_STOPPED', reason: 'the bay is stopped, so the sample was not placed' };
+  return null;
+}
+
 /**
  * Description -> Gemini program -> fabricate -> bay.samples.createMesh(..., 'gemini'), with one repair turn on a
  * design refusal and a keyword-matched preset as the last resort. Placement refusals come back as they are.
+ * A cancelled request (signal aborted, e.g. by an emergency stop) returns ABORTED with no fallback, and
+ * nothing is placed while the bay is STOPPED or ESTOPPED (checked right before placing).
  */
 export async function designAndFabricate(bay: BayApi, description: string, placement: Placement | undefined, deps: DesignerDeps, signal?: AbortSignal): Promise<Designed | Rejection> {
   let latencyMs = 0;
   let attempts = 0;
   const fallback = async (why: string): Promise<Designed | Rejection> => {
+    const stop = halted(bay, signal);
+    if (stop) return stop;
     const p = matchPreset(description);
-    const r = await fabricatePreset(bay, p.id, placement);
+    const r = await fabricatePreset(bay, p.id, placement, () => halted(bay, signal));
     if (!r.ok) return r;
     const note = `${why}; fabricated the closest preset (${p.label}) instead.`;
     return { ...r, say: `${r.say} ${note}`, note, attempts, latencyMs, source: p.source };
   };
   const place = (f: Fabricated, note?: string): Designed | Rejection => {
+    const stop = halted(bay, signal);
+    if (stop) return stop;
     const r = placeFabricated(bay, f, placement, 'gemini');
     if (!r.ok) return r;
     return { ...r, say: note ? `${r.say} ${note}` : r.say, ...(note ? { note } : {}), attempts, latencyMs, source: 'gemini' };
@@ -86,6 +108,7 @@ export async function designAndFabricate(bay: BayApi, description: string, place
     attempts++;
     first = await designProgram(description, deps, undefined, signal);
   } catch (e) {
+    if (signal?.aborted || isAbort(e)) return { ...ABORTED };
     return fallback(`Gemini did not answer (${String((e as Error).message).slice(0, 60)})`);
   }
   latencyMs += first.latencyMs;
@@ -96,7 +119,8 @@ export async function designAndFabricate(bay: BayApi, description: string, place
   try {
     attempts++;
     second = await designProgram(description, deps, { program: first.program, reason: f1.reason, suggestion: f1.suggestion }, signal);
-  } catch {
+  } catch (e) {
+    if (signal?.aborted || isAbort(e)) return { ...ABORTED };
     return fallback(`the guardrail refused the design (${f1.reason}) and the repair turn did not answer`);
   }
   latencyMs += second.latencyMs;

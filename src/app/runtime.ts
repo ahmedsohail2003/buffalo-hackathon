@@ -26,6 +26,7 @@ import { log, type LogKind } from './bus';
 import { getHandFrame, normalizeHandFrame, setHandFrame } from './hand';
 import { PARAMS } from './params';
 import { HandSignals, bindSignalsToGate, type SignalSnapshot } from '../safety';
+import { FRESH_MS } from '../teleop/teleop';
 
 export type InputMode = 'sim' | 'camera';
 
@@ -215,6 +216,10 @@ class Runtime {
     } else if (hand && t - hand.t <= HAND_STALE_MS) {
       label = hand.gesture;
       score = hand.gestureScore;
+    } else if (hand && t - hand.t <= FRESH_MS) {
+      // A slow camera (a few fps): teleop still counts this hand as present, so skip the sample
+      // instead of feeding null, which would break a held STOP or fist between two frames.
+      return hand;
     }
     this.signals.feed(this.filterSafetyLabel(label, hand, t), score, t);
     return hand;
@@ -263,7 +268,7 @@ class Runtime {
   fistHeld(now: number = performance.now()): boolean {
     if (this.simGesture === 'Closed_Fist') return true;
     const f = getHandFrame();
-    return !!f && now - f.t <= HAND_STALE_MS && f.gesture === 'Closed_Fist';
+    return !!f && now - f.t <= FRESH_MS && f.gesture === 'Closed_Fist';
   }
 
   /** Two-step E-STOP reset from the panel: 'arm' (bay is clear), then 'confirm' (back to IDLE). */

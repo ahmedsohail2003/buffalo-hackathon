@@ -23,6 +23,7 @@ export const LIVE_PROMPT = [
   'Moving tools answer "started" at once. Never say a move or a new sample worked until its result arrives in a message that begins with [BAY EVENT]; then report it in a few words.',
   '[BAY EVENT] messages are bay telemetry, not the operator speaking. Report them briefly and do not repeat old ones.',
   'You cannot stop, resume, slow or reset the bay. The operator owns safety: an open palm stops the arm and a held fist is an emergency stop. If the bay is stopped, say so and wait.',
+  'You cannot start the bay either. While it is IDLE, moving tools are refused: ask the operator to start the cycle (Victory sign or CYCLE START) and wait for a [BAY EVENT] saying the bay is RUNNING. Never retry a move because the bay changed state.',
   'Use sample ids from describe_bay. If a request is ambiguous, ask one short question.',
   'After a pick or a place you may use check_bay once to confirm on camera. If the camera and the registry disagree, trust the registry.',
 ].join('\n');
@@ -571,7 +572,13 @@ export class LiveVoice {
       }
       this.respond(fc.id, name, { ok: true, status: 'started', note: 'Running now. The result follows as a [BAY EVENT] message.' }, 'SILENT');
       this.events.onTool?.(`${name}(${formatArgs(args)}) started`);
-      void dispatchTool(this.bay, name, args, 'live', this.toolCtx()).then((result) => {
+      // An emergency stop cancels the call in flight (a design then places nothing).
+      const ac = new AbortController();
+      const offGate = this.bay.gate.onChange((s) => {
+        if (s === 'ESTOPPED') ac.abort();
+      });
+      void dispatchTool(this.bay, name, args, 'live', { ...this.toolCtx(), signal: ac.signal }).then((result) => {
+        offGate();
         const line = `${name}(${formatArgs(args)}) ${result.ok ? 'succeeded' : 'failed'}: ${summarizeResult(name, result)}`;
         this.events.onTool?.(line);
         this.sendBayEvent(line);

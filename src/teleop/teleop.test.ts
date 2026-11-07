@@ -3,7 +3,7 @@ import type { BayState, HandFrame } from '../contracts';
 import { createTeleop, isSafetySignal, type TeleopConfig } from './teleop';
 import { simHandFrame } from './handTemplate';
 import { workspaceToUV } from './mapping';
-import { getTeleopStatus, isTeleopEnabled, shouldSuppressFist } from './state';
+import { fistMaskFilter, getTeleopStatus, isTeleopEnabled, shouldSuppressFist } from './state';
 import { CONTAINMENT, Z_LIFT, fistLike, makeBay } from './testFakes';
 
 const DT = 1 / 60;
@@ -195,6 +195,20 @@ describe('teleop: the safety channel', () => {
     expect(isSafetySignal(r.camAt(0, -0.18, 'None', 0.95)(0))).toBe(false);
   });
 
+  it('a hand that comes back into view already signalling never steers toward itself', async () => {
+    for (const gesture of ['Open_Palm', 'Closed_Fist']) {
+      const r = rig();
+      r.teleop.enable();
+      await r.run(60, r.handAt(0.07, -0.17));
+      expect(r.tcpErr(0.07, -0.17, Z_HOVER)).toBeLessThan(1e-3);
+      await r.run(1, () => null); // one dropped frame clears the target
+      await r.run(36, r.camAt(-0.07, -0.17, gesture, 0.9)); // back at the far side, showing a signal
+      expect(r.tcpErr(0.07, -0.17, Z_HOVER)).toBeLessThan(1e-3);
+      expect(r.arm.servo).toBeNull();
+      expect(r.teleop.status().mode).toBe('holding');
+    }
+  });
+
   it('never fights a task that owns the arm, and turns off for an AI task', async () => {
     let task = false;
     const r = rig('RUNNING', { taskActive: () => task });
@@ -211,6 +225,20 @@ describe('teleop: the safety channel', () => {
     expect(r.teleop.status()).toMatchObject({ enabled: false, mode: 'off' });
     r.teleop.enable();
     expect(r.teleop.status().enabled).toBe(false);
+  });
+
+  it('fistMaskFilter masks every pinch, not only the first: the timer resets when the pinch ends', async () => {
+    const r = rig();
+    r.teleop.enable();
+    const pinch = (t: number): HandFrame => ({ ...simHandFrame(0.5, 0.5, true, t), gesture: 'Closed_Fist', gestureScore: 0.9, source: 'camera' });
+    const open = (t: number): HandFrame => ({ ...simHandFrame(0.5, 0.5, false, t), gesture: null, gestureScore: 0, source: 'camera' });
+    expect(fistMaskFilter('Closed_Fist', pinch(10_000), 10_000)).toBeNull(); // pinch 1
+    expect(fistMaskFilter(null, open(10_300), 10_300)).toBeNull(); // the pinch ends (label None)
+    expect(fistMaskFilter('Closed_Fist', pinch(13_000), 13_000)).toBeNull(); // pinch 2, seconds later: still masked
+    expect(fistMaskFilter('Closed_Fist', pinch(13_600), 13_600)).toBe('Closed_Fist'); // held past 500 ms: the fist counts
+    expect(fistMaskFilter('Open_Palm', open(13_700), 13_700)).toBe('Open_Palm');
+    const fist: HandFrame = { ...pinch(14_000), landmarks: fistLike() };
+    expect(fistMaskFilter('Closed_Fist', fist, 14_000)).toBe('Closed_Fist'); // a real fist is never hidden
   });
 
   it('shouldSuppressFist: only while teleop is on, on a real pinch pose, for at most 500 ms', async () => {

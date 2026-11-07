@@ -1,6 +1,7 @@
 // The tools Gemini may call (typed coworker and Live voice share them) and the one dispatcher
-// that runs them. Moving and creating tools are refused while the bay is STOPPED or ESTOPPED,
-// with a reason that can be spoken; read-only tools always answer. Every call is a log line.
+// that runs them. Moving and creating tools are refused while the bay is STOPPED or ESTOPPED, and
+// arm moves also while it is IDLE (AI never starts a cycle), with a reason that can be spoken;
+// read-only tools always answer. Every call is a log line.
 // No DOM at import time.
 import type { BayApi, MoveResult, Placement, Sample } from '../contracts';
 import { BAY_FACTS, BAY_FRAME_TEXT, defaultInContainment } from './bayFacts';
@@ -45,6 +46,8 @@ export interface ToolResult {
 
 /** Tools that move the arm or create a sample: refused while STOPPED or ESTOPPED. */
 export const MOVING_TOOLS: ReadonlySet<string> = new Set(['pick_sample', 'place_sample', 'place_in_containment', 'go_home', 'design_sample']);
+/** Tools that move the arm: also refused while IDLE, because only the operator starts a cycle. */
+export const ARM_TOOLS: ReadonlySet<string> = new Set(['pick_sample', 'place_sample', 'place_in_containment', 'go_home']);
 /** Tools that answer at once from the registry (no arm motion, no Gemini call). */
 export const INSTANT_TOOLS: ReadonlySet<string> = new Set(['describe_bay', 'bay_status']);
 
@@ -155,7 +158,7 @@ export const FABRICATOR_OFFLINE: ToolResult = {
   suggestion: 'Use one of the samples already on the deck.',
 };
 
-/** A refusal for a moving or creating tool while the bay is stopped, else null. */
+/** A refusal for a moving or creating tool while the bay is stopped (or, for arm moves, idle), else null. */
 export function gateRefusal(bay: BayApi, name: string): ToolResult | null {
   if (!MOVING_TOOLS.has(name)) return null;
   const state = bay.gate.state();
@@ -164,6 +167,14 @@ export function gateRefusal(bay: BayApi, name: string): ToolResult | null {
   }
   if (state === 'STOPPED') {
     return { ok: false, code: 'BAY_STOPPED', bay_state: state, reason: 'The bay is stopped. The arm will not move until the operator resumes.' };
+  }
+  if (state === 'IDLE' && ARM_TOOLS.has(name)) {
+    return {
+      ok: false,
+      code: 'BAY_IDLE',
+      bay_state: state,
+      reason: 'The bay is idle. The operator has to start the cycle first: show the Victory sign or press CYCLE START.',
+    };
   }
   return null;
 }
