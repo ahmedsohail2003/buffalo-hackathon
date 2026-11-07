@@ -29,11 +29,12 @@ export function useInputMode(): InputMode {
   );
 }
 
-export function useLastCapture(): { dataUrl: string; t: number } | null {
+/** Date.now() of the last bay-camera capture (a frame handed to Gemini), or null. */
+export function useLastCaptureAt(): number | null {
   const rt = getRuntime();
   return useSyncExternalStore(
     (cb) => rt.onCapture(cb),
-    () => rt.getLastCapture(),
+    () => rt.getLastCaptureAt(),
   );
 }
 

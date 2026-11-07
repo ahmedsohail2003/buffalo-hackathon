@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import type { BayState } from '../contracts';
 import { log } from '../app/bus';
 import { getRuntime } from '../app/runtime';
-import { BayScene } from '../scene/BayScene';
-import { useBayState, useLastCapture, useNow, useTelemetry } from './hooks';
+import { BayScene, getBayView } from '../scene/BayScene';
+import { useBayState, useLastCaptureAt, useNow, useTelemetry } from './hooks';
 
 const STATE_TEXT: Record<BayState, string> = {
   IDLE: 'Ready. The arm holds until a cycle start or a task.',
   RUNNING: 'Cycle running at full speed.',
   SLOW: 'Reduced speed: every move runs at half speed.',
   STOPPED: 'Stopped. The arm holds position; thumb up to resume.',
-  ESTOPPED: 'Emergency stop. The arm is halted and teleop is disabled.',
+  ESTOPPED: 'Emergency stop: the arm is halted and teleop is off.',
 };
 
 function Andon({ state }: { state: BayState }) {
@@ -107,33 +107,37 @@ function ResetPanel() {
 }
 
 function BayCamCard() {
-  const cap = useLastCapture();
+  const host = useRef<HTMLDivElement>(null);
+  const lastAt = useLastCaptureAt();
   const now = useNow();
-  const ago = cap ? Math.max(0, Math.round((now - cap.t) / 1000)) : null;
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    let canvas: HTMLCanvasElement;
+    try {
+      canvas = getBayView().bayCanvas;
+    } catch {
+      return;
+    }
+    el.appendChild(canvas);
+    return () => {
+      if (canvas.parentElement === el) el.removeChild(canvas);
+    };
+  }, []);
+  const ago = lastAt === null ? null : Math.max(0, Math.round((now - lastAt) / 1000));
   return (
     <div className="baycam glass">
       <div className="row">
         <b>BAY CAMERA</b>
-        <button
-          type="button"
-          className="btn small ghost"
-          style={{ height: 20, padding: '0 6px', fontSize: 10.5 }}
-          onClick={() => {
-            try {
-              getRuntime().capture();
-            } catch (err) {
-              log('reject', `Bay camera capture failed: ${(err as Error).message}`);
-            }
-          }}
-          aria-label="Capture a bay camera frame"
-        >
-          Capture
-        </button>
+        <span className="chip green" style={{ height: 17, fontSize: 9.5, padding: '0 6px' }}>
+          <span className="dot" />
+          LIVE
+        </span>
       </div>
-      <div className="img">{cap ? <img src={cap.dataUrl} alt="Latest bay camera frame: what Gemini sees" /> : <span>What Gemini sees. No frame yet.</span>}</div>
+      <div className="img" ref={host} />
       <div className="row">
-        <span>{ago === null ? 'Fixed camera, 768 px' : ago < 2 ? 'just now' : `${ago} s ago`}</span>
-        <span className="num">768²</span>
+        <span>Gemini's view</span>
+        <span className="num">{ago === null ? '768²' : ago < 2 ? 'sent now' : `sent ${ago}s ago`}</span>
       </div>
     </div>
   );

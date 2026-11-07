@@ -77,7 +77,7 @@ class Runtime {
   private telemetrySubs = new Set<() => void>();
   private inputMode: InputMode = 'sim';
   private inputSubs = new Set<() => void>();
-  private lastCapture: { dataUrl: string; t: number } | null = null;
+  private lastCaptureAt: number | null = null;
   private captureSubs = new Set<() => void>();
 
   constructor() {
@@ -128,18 +128,7 @@ class Runtime {
     this.lastTick = now;
 
     // 1. safety
-    const hand = getHandFrame();
-    let label: string | null = null;
-    let score = 0;
-    if (this.simGesture) {
-      label = this.simGesture;
-      score = 1;
-    } else if (hand && now - hand.t <= HAND_STALE_MS) {
-      label = hand.gesture;
-      score = hand.gestureScore;
-    }
-    const fired = this.machine.feed(this.filterSafetyLabel(label, hand, now), score, now);
-    if (fired) this.applySignal(fired, this.simGesture ? 'keypad' : 'hand');
+    const hand = this.feedSafety(now);
 
     // 2. tick hooks
     if (this.hooks.length) {
@@ -178,6 +167,23 @@ class Runtime {
 
   // ---- safety -------------------------------------------------------------------------------
 
+  /** One sample into the dwell machine: the keypad if held, else the latest fresh hand frame. */
+  private feedSafety(now: number): HandFrame | null {
+    const hand = getHandFrame();
+    let label: string | null = null;
+    let score = 0;
+    if (this.simGesture) {
+      label = this.simGesture;
+      score = 1;
+    } else if (hand && now - hand.t <= HAND_STALE_MS) {
+      label = hand.gesture;
+      score = hand.gestureScore;
+    }
+    const fired = this.machine.feed(this.filterSafetyLabel(label, hand, now), score, now);
+    if (fired) this.applySignal(fired, this.simGesture ? 'keypad' : 'hand');
+    return hand;
+  }
+
   filterSafetyLabel(label: string | null, frame: HandFrame | null, now: number): string | null {
     try {
       return this.labelFilter(label, frame, now);
@@ -195,9 +201,16 @@ class Runtime {
     return this.machine.snapshot();
   }
 
-  /** Keypad / on-screen signal buttons: hold a simulated gesture (null releases it). */
+  /**
+   * Keypad / on-screen signal buttons: hold a simulated gesture (null releases it). The press and
+   * the release are sampled at once, so the dwell is timed from the key events even when frames lag.
+   */
   setSimGesture(label: string | null): void {
+    if (label === this.simGesture) return;
+    const now = performance.now();
+    if (this.simGesture) this.feedSafety(now);
     this.simGesture = label;
+    this.feedSafety(now);
   }
 
   applySignal(signal: SafetySignal, source: SignalSource): void {
@@ -236,13 +249,14 @@ class Runtime {
   capture(): FrameCapture {
     if (!this.scene) throw new Error('The bay scene is not mounted yet');
     const frame = this.scene.capture();
-    this.lastCapture = { dataUrl: `data:image/jpeg;base64,${frame.jpegB64}`, t: Date.now() };
+    this.lastCaptureAt = frame.t;
     this.captureSubs.forEach((cb) => cb());
     return frame;
   }
 
-  getLastCapture(): { dataUrl: string; t: number } | null {
-    return this.lastCapture;
+  /** Date.now() of the last BayApi.capture(), or null. */
+  getLastCaptureAt(): number | null {
+    return this.lastCaptureAt;
   }
 
   onCapture(cb: () => void): () => void {

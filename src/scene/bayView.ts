@@ -14,6 +14,8 @@ import { SampleLayer } from './samples';
 
 const MARS_URL = `${import.meta.env.BASE_URL}assets/space/mars_1024.jpg`;
 const ESTOP_TINT = new THREE.Color('#ef4444');
+/** live preview refresh of the bay camera canvas, ms */
+const PREVIEW_MS = 500;
 const VIEW_HOME = { pos: new THREE.Vector3(-0.36, -0.88, 0.47), target: new THREE.Vector3(0.03, -0.1, 0.08) };
 
 interface TintSlot {
@@ -41,6 +43,9 @@ export class BayView implements SceneLink {
   private hooks = new Map<SceneHook, { update(): void; dispose?(): void }>();
   private offs: (() => void)[] = [];
   private lastNow = 0;
+  private lastBayRender = -Infinity;
+  /** the bay camera's own canvas (768x768): the UI shows it as a live preview */
+  readonly bayCanvas: HTMLCanvasElement;
 
   constructor(private core: BayCore, private bayCam: BayCameraModel) {
     const scene = this.scene;
@@ -151,6 +156,9 @@ export class BayView implements SceneLink {
     this.bayRenderer.toneMappingExposure = 1.0;
     this.bayRenderer.shadowMap.enabled = true;
     this.bayRenderer.shadowMap.type = THREE.PCFShadowMap;
+    this.bayCanvas = this.bayRenderer.domElement;
+    this.bayCanvas.setAttribute('role', 'img');
+    this.bayCanvas.setAttribute('aria-label', 'Live bay camera: the fixed view Gemini sees');
 
     // ---- scene hooks (teleop marker and friends)
     for (const h of registeredSceneHooks()) this.addHook(h);
@@ -228,12 +236,19 @@ export class BayView implements SceneLink {
       }
     }
     this.viewer.render(this.scene, this.viewerCam);
+    if (now - this.lastBayRender > PREVIEW_MS && this.bayCanvas.isConnected) this.renderBay(now);
+  }
+
+  private renderBay(now: number): void {
+    this.lastBayRender = now;
+    this.bayRenderer.render(this.scene, this.bayCam.camera);
   }
 
   /** SceneLink: render the fixed bay camera to a square JPEG (what Gemini sees). */
   capture(): FrameCapture {
-    this.sync(this.lastNow || performance.now());
-    this.bayRenderer.render(this.scene, this.bayCam.camera);
+    const now = this.lastNow || performance.now();
+    this.sync(now);
+    this.renderBay(now);
     const url = this.bayRenderer.domElement.toDataURL('image/jpeg', 0.9);
     return { jpegB64: url.slice(url.indexOf(',') + 1), w: BAY_CAPTURE_SIZE, h: BAY_CAPTURE_SIZE, t: Date.now() };
   }
