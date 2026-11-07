@@ -298,10 +298,19 @@ function readAnswer(v: unknown): Answer {
   return 'unsure';
 }
 
-/** Code's own answer to "is X in containment?", or undefined when code cannot answer this one. */
+/** Asks plainly whether something is in the bin ("Is X inside the containment bin?"). */
+const IN_BIN = /\b(in|inside|into|within)\b.*\b(contain\w*|bin|tray)\b/i;
+/** Negated or other relations to the bin ("outside", "not in", "next to", "fell out"): not the positive form. */
+const NOT_IN_BIN = /\b(not|no|outside|out|next|near|beside|left|right|front|behind|above|below|under|between|around|fell|fall|fallen|removed|still|off|rim|edge)\b|n't/i;
+
+/**
+ * Code's own answer to "is X in containment?", or undefined when code cannot answer this one. Only the
+ * plain positive form is decided by code; for any other question the camera answers and in_containment
+ * stays in the registry data.
+ */
 function registryAnswer(question: string, mentioned: Sample[], deps: ErDeps): boolean | undefined {
   if (!deps.inContainment || mentioned.length !== 1) return undefined;
-  if (!/contain|\bbin\b|\btray\b/i.test(question)) return undefined;
+  if (!IN_BIN.test(question) || NOT_IN_BIN.test(question)) return undefined;
   return deps.inContainment(mentioned[0]);
 }
 
