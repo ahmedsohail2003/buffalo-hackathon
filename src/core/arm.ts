@@ -8,11 +8,14 @@
 import type { ArmApi, ArmSnapshot, GateApi, MoveResult, PrimCode, Sample, Vec3 } from '../contracts';
 import {
   CONTAINMENT_INNER,
+  CONTAINMENT_OUTER_HALF,
   CONTAINMENT_XY,
   DECK_CLEARANCE,
   HOME_Q,
   JAW_OPEN,
+  MIN_SPACING,
   REACH,
+  SPACING_EXTRA,
   STACK_MAX_H,
   Z_CONTAINMENT_LOWER,
   Z_HOVER,
@@ -594,6 +597,22 @@ export class Arm implements ArmApi {
     if (r < REACH.rhoMin || r > REACH.rhoMax || Math.abs(bearingOf(x, y)) > REACH.bearingMax) return this.unreachable('that spot', x, y);
     const rest = this.samples.restZ(s, x, y);
     if (rest.on === 'wall') return fail('UNREACHABLE', `that spot is on the containment bin's wall; place it inside the bin or away from it.`);
+    const rad = sampleRadius(s.dims);
+    if (rest.on !== 'sample') {
+      // the whole footprint, not only the centre, must clear the wall: inside the inner face or past the outer one
+      const m = Math.max(Math.abs(x - CONTAINMENT_XY[0]), Math.abs(y - CONTAINMENT_XY[1]));
+      if (m > CONTAINMENT_INNER / 2 - rad && m < CONTAINMENT_OUTER_HALF + rad) {
+        return fail('UNREACHABLE', `${s.name} would rest across the containment bin's wall there; place it inside the bin or at least ${mmStr(CONTAINMENT_OUTER_HALF + rad)} from the bin centre on each side.`);
+      }
+    }
+    if (rest.on === 'deck') {
+      for (const o of this.samples.list()) {
+        if (o.id === s.id || o.held) continue;
+        const need = Math.max(MIN_SPACING, rad + sampleRadius(o.dims) + SPACING_EXTRA);
+        const d = Math.hypot(x - o.pos[0], y - o.pos[1]);
+        if (d < need - 1e-9) return fail('UNREACHABLE', `that spot is ${mmStr(d)} from ${o.name}; leave at least ${mmStr(need)} between their centres so the jaw has room.`);
+      }
+    }
     if (rest.on === 'sample') {
       const under = this.samples.get(rest.underId!)!;
       const d = Math.hypot(x - under.pos[0], y - under.pos[1]);

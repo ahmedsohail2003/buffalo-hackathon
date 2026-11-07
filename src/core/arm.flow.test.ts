@@ -76,7 +76,8 @@ describe('Arm flows', () => {
     const tall = bay.samples.createPrimitive({ color: '#ef4444', kind: 'cylinder', width_mm: 30, height_mm: 45 });
     if (!tall.ok) throw new Error(tall.reason);
     await runUntil(bay, bay.arm.pick(tall.sample.id));
-    const p = bay.arm.placeAt(polarXY(0.17, -0.25));
+    // far enough from the seed cube for the jaw (place keeps max(40, r_a + r_b + 10) mm between centres)
+    const p = bay.arm.placeAt(polarXY(0.17, 0.32));
     let minBottomWhileCarrying = Infinity;
     let done = false;
     p.then(() => (done = true));
