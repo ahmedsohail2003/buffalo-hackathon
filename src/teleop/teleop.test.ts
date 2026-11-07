@@ -195,6 +195,20 @@ describe('teleop: the safety channel', () => {
     expect(isSafetySignal(r.camAt(0, -0.18, 'None', 0.95)(0))).toBe(false);
   });
 
+  it('a hand that comes back into view already signalling never steers toward itself', async () => {
+    for (const gesture of ['Open_Palm', 'Closed_Fist']) {
+      const r = rig();
+      r.teleop.enable();
+      await r.run(60, r.handAt(0.07, -0.17));
+      expect(r.tcpErr(0.07, -0.17, Z_HOVER)).toBeLessThan(1e-3);
+      await r.run(1, () => null); // one dropped frame clears the target
+      await r.run(36, r.camAt(-0.07, -0.17, gesture, 0.9)); // back at the far side, showing a signal
+      expect(r.tcpErr(0.07, -0.17, Z_HOVER)).toBeLessThan(1e-3);
+      expect(r.arm.servo).toBeNull();
+      expect(r.teleop.status().mode).toBe('holding');
+    }
+  });
+
   it('never fights a task that owns the arm, and turns off for an AI task', async () => {
     let task = false;
     const r = rig('RUNNING', { taskActive: () => task });

@@ -184,7 +184,8 @@ class TeleopController implements Teleop {
     const p = palmPoint(frame.landmarks);
     const tS = frame.t / 1000;
     const m = mapToWorkspace(this.fu.filter(p.u, tS), this.fv.filter(p.v, tS), this.cfg.reach);
-    if (!this.frozen || !this.targetXY) {
+    // A frozen hand keeps the old target; with no target yet (the hand just came back) it holds.
+    if (!this.frozen) {
       this.targetXY = [m.x, m.y];
       this.clamped = m.clamped;
     }
