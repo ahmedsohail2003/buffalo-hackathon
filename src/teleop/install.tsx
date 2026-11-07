@@ -8,7 +8,7 @@ import { CONTAINMENT_OUTER_HALF, CONTAINMENT_XY, REACH, Z_HOVER, Z_LIFT } from '
 import { registerSceneHook } from '../scene/registry';
 import { registerHandPaneExtra, registerSimStage, registerTeleopController } from '../ui/slots';
 import type { HandFrame } from '../contracts';
-import { createTeleop, latestHandFrame, shouldSuppressFist, teleopSceneHook } from '.';
+import { createTeleop, fistMaskFilter, latestHandFrame, teleopSceneHook } from '.';
 import { SimHandPad } from './SimHandPad';
 import { TeleopPanel } from './TeleopPanel';
 
@@ -29,7 +29,7 @@ const newest = (a: HandFrame | null, b: HandFrame | null) => (!a ? b : !b ? a : 
 registerTickHook((nowMs, _dt, ctx) =>
   teleop.step(nowMs, newest(ctx.hand, latestHandFrame()), FORMING[ctx.safety.phase] ?? ctx.safety.phase),
 );
-setSafetyLabelFilter((label, frame, nowMs) => (label === 'Closed_Fist' && shouldSuppressFist(frame, nowMs) ? null : label));
+setSafetyLabelFilter(fistMaskFilter);
 registerSceneHook(teleopSceneHook());
 registerTeleopController(teleop);
 // The shell's switch drives teleop; the panel adds the status chip and the camera-mode hint.
