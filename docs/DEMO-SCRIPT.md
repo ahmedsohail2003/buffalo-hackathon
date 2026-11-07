@@ -17,7 +17,7 @@ Judging is in person: **3 minutes to pitch and demo, then 2 minutes of questions
 ## Questions to prepare for (2 minutes)
 
 - **"Is it a real robot?"** No. It's a kinematic simulation of the SO-101, the arm I used to train ACT and SmolVLA policies with LeRobot. The kinematics come from the official MuJoCo model. Next step: record teleop sessions as LeRobot datasets.
-- **"What did you build this weekend?"** Everything in the repository; the commit history starts today. Earlier projects contributed ideas only.
+- **"What did you build this weekend?"** Everything in the repository was written during the event. Earlier projects contributed ideas only. One early commit that copied an earlier project was discarded once we read the rules; PROVENANCE.md discloses it.
 - **"What if Gemini is wrong?"** It can't move the arm directly. Every sample and move goes through code checks, and hand signals override it.
 - **"Latency?"** Hand tracking runs at about 30 Hz on the device. Gemini checks take about 1–3 s each and never sit in the safety loop.
 
