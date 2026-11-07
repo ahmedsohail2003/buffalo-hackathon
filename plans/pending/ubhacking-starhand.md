@@ -85,9 +85,17 @@ The original T, G, S and V modules were written tonight (from 14:37 on) against 
 
 | Phase | Status |
 | --- | --- |
-| Research (9 agents) | done 15:00 |
-| Clean foundation | done 15:00 (`be6251e`); public tip clean via a non-destructive merge at 15:10 |
-| Tracks C, U, A | building (started 15:05) |
-| Port T | done 15:13 |
-| Port G | building |
-| Integration and end-to-end testing | pending |
+| Research (9 agents) | Done 15:00 |
+| Clean foundation | Done 15:00 (`be6251e`). Public tip made clean with a non-destructive merge at 15:10. |
+| C: arm core + safety | **Done.** The SO-101 kinematics match MuJoCo to under 4e-8 m; constants are derived from the model; 88 tests. |
+| U: mission-control UI + bay scene | **Done.** Real SO-101 meshes, space backdrop on layer 1 (the bay camera sees only the deck), keypad and the two-step E-STOP reset. |
+| A: Gemini + voice + server + Vultr kit | **Done.** Tested with fakes and a fake upstream; no real keys yet. |
+| T: teleop (port) | **Done.** |
+| G: Fabricator (port) | **Done.** 13 presets, including 4 NASA asteroid models. |
+| D: deck | **Done.** 12 slides with real screenshots and speaker notes. |
+| Integration | **Done 16:33.** Install modules in `src/plugins.ts`. 229 tests pass and tsc is clean. In the Playwright end-to-end run, the simulated hand steers the arm onto the cube (0.1 mm), one pinch picks it, a second pinch stows it in containment ("Sample secured in containment."), STOP and RESUME are announced, and there are no console errors. |
+| Safety and security review | Running (16:35) |
+| Real-key smoke tests (Gemini, ElevenLabs, Live) | Waiting on the user's keys |
+| Vultr deploy, domain | Waiting on the user's account |
+| Devpost draft (due 23:00) | Text ready in `docs/SUBMISSION.md`; the user must create the project on Devpost |
+
