@@ -4,6 +4,7 @@ import { wrapPi } from './ik';
 import {
   CONTAINMENT_FLOOR_Z,
   CONTAINMENT_INNER,
+  CONTAINMENT_OUTER_HALF,
   CONTAINMENT_XY,
   HOME_Q,
   JAW_OPEN,
@@ -286,6 +287,25 @@ describe('Arm: pick and place primitives', () => {
     const wall = await runUntil(bay, bay.arm.placeAt([CONTAINMENT_XY[0] + CONTAINMENT_INNER / 2 + 0.002, CONTAINMENT_XY[1]]));
     expect(wall).toMatchObject({ ok: false, code: 'UNREACHABLE' });
     expect((wall as { reason: string }).reason).toContain('wall');
+  });
+
+  it('refuses a place whose footprint crosses the bin wall or crowds a deck neighbour', async () => {
+    const bay = await makeBay();
+    await runUntil(bay, bay.arm.pick('sample_1'));
+    // centre 2 mm inside the inner face, then 1 mm outside the outer face: the 24 mm cube spans the wall either way
+    for (const dx of [CONTAINMENT_INNER / 2 - 0.002, CONTAINMENT_OUTER_HALF + 0.001]) {
+      const r = await runUntil(bay, bay.arm.placeAt([CONTAINMENT_XY[0] + dx, CONTAINMENT_XY[1]]));
+      expect(r).toMatchObject({ ok: false, code: 'UNREACHABLE' });
+      expect((r as { reason: string }).reason).toContain('wall');
+    }
+    expect(await runUntil(bay, bay.arm.placeAt([0, -0.165]))).toMatchObject({ ok: true });
+    const other = bay.samples.createPrimitive({ color: '#ef4444', kind: 'cylinder', width_mm: 30, height_mm: 30 });
+    if (!other.ok) throw new Error(other.reason);
+    await runUntil(bay, bay.arm.pick(other.sample.id));
+    const near = await runUntil(bay, bay.arm.placeAt([0.0375, -0.165]));
+    expect(near).toMatchObject({ ok: false, code: 'UNREACHABLE' });
+    expect((near as { reason: string }).reason).toMatch(/from sample cube; leave at least \d+ mm/);
+    expect(await runUntil(bay, bay.arm.placeAt(polarXY(0.17, 0.32)))).toMatchObject({ ok: true });
   });
 
   it('home returns to HOME_Q, keeping a held sample in the jaw', async () => {
