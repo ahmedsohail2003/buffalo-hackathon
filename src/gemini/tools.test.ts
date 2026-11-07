@@ -26,6 +26,26 @@ const noCall: CallFn = async () => {
 };
 
 describe('tools: gate rules', () => {
+  it('refuses arm moves while IDLE (AI never starts a cycle); design and read-only tools still run', async () => {
+    const bay = makeFakeBay({ samples: [bennu], state: 'IDLE' });
+    const { c } = ctx({ fabricate: async () => ({ ok: true, sample: bennu, say: 'made' }) });
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['pick_sample', { id: 's1' }],
+      ['place_sample', { x_mm: 0, y_mm: -200 }],
+      ['place_in_containment', {}],
+      ['go_home', {}],
+    ];
+    for (const [name, args] of calls) {
+      const r = await dispatchTool(bay, name, args, 'live', c);
+      expect(r).toMatchObject({ ok: false, code: 'BAY_IDLE', bay_state: 'IDLE' });
+      expect(String(r.reason)).toMatch(/^The bay is idle\. The operator has to start the cycle first/);
+    }
+    expect(bay.calls.filter((x) => x.fn !== 'capture')).toEqual([]);
+    expect(bay.gate.state()).toBe('IDLE');
+    expect(await dispatchTool(bay, 'design_sample', { description: 'a shard' }, 'live', c)).toMatchObject({ ok: true });
+    expect(await dispatchTool(bay, 'bay_status', {}, 'live', c)).toMatchObject({ ok: true, bay_state: 'IDLE' });
+  });
+
   it('refuses every moving or creating tool while STOPPED or ESTOPPED, with a speakable reason', async () => {
     for (const state of ['STOPPED', 'ESTOPPED'] as const) {
       const bay = makeFakeBay({ samples: [bennu], state });

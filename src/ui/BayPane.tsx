@@ -5,7 +5,7 @@ import { BayScene, getBayView } from '../scene/BayScene';
 import { useBayState, useLastCaptureAt, useNow, useTelemetry } from './hooks';
 
 const STATE_TEXT: Record<BayState, string> = {
-  IDLE: 'Ready. The arm holds until a cycle start or a task.',
+  IDLE: 'Ready. The arm holds until the operator starts a cycle. AI cannot start it.',
   RUNNING: 'Cycle running at full speed.',
   SLOW: 'Reduced speed: every move runs at half speed.',
   STOPPED: 'Stopped. The arm holds position; thumb up to resume.',
