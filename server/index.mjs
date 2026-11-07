@@ -482,7 +482,11 @@ if (isMain) {
       `STARHAND server on http://${cfg.host}:${cfg.port} | dist ${cfg.dist} | gemini ${cfg.gemini.key ? 'on' : 'off'} | elevenlabs ${cfg.el.key ? 'on' : 'off'}`,
     );
   });
-  const stop = () => server.close(() => process.exit(0));
+  const stop = () => {
+    server.close(() => process.exit(0));
+    server.closeIdleConnections();
+    setTimeout(() => process.exit(0), 3000).unref(); // do not let a streaming client hold a restart
+  };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 }
