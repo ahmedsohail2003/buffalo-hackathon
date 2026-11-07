@@ -114,3 +114,20 @@ describe('announcer rate limit', () => {
     expect(said).toHaveLength(2);
   });
 });
+
+describe('safety callouts follow the gate transition, not keywords in the note', () => {
+  const at = (text: string) => calloutFor({ t: 0, kind: 'safety', text })?.text ?? null;
+  it('a STOP whose note says "resume to continue" is announced as a stop', () => {
+    expect(at('STOP (gesture): RUNNING -> STOPPED. Arm frozen; resume to continue.')).toBe('All stop. Arm holding.');
+  });
+  it('resume, slow, cycle start, e-stop and its reset', () => {
+    expect(at('RESUME (gesture): STOPPED -> RUNNING. Resumed.')).toBe('Resuming. Arm is live.');
+    expect(at('SLOW (gesture): RUNNING -> SLOW. Half speed.')).toBe('Slow mode. Half speed.');
+    expect(at('CYCLE_START (auto): IDLE -> RUNNING. Cycle started.')).toBe('Cycle start.');
+    expect(at('ESTOP (gesture): RUNNING -> ESTOPPED. Every move aborted.')).toBe('Emergency stop. Arm locked.');
+    expect(at('RESET_CONFIRM (panel): ESTOPPED -> IDLE. Bay reset.')).toBe('Emergency stop cleared.');
+  });
+  it('a command that leaves the state unchanged is not announced', () => {
+    expect(at('STOP (gesture): STOPPED -> STOPPED. Already stopped.')).toBeNull();
+  });
+});

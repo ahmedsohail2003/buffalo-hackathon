@@ -594,6 +594,19 @@ button {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* Simulated-input mode: the camera box hosts a registered stage (the simulated hand pad). */
+.cam-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+.cam-stage .teleop-pad {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  border: none;
+  border-radius: 0;
+}
 .hand-extras {
   margin-top: 12px;
   display: grid;

@@ -68,6 +68,20 @@ export function calloutFor(line: LogLine): Callout | null {
   const t = text.toLowerCase();
 
   if (line.kind === 'safety') {
+    // Gate transitions read 'CMD (source): FROM -> TO. note': speak the state the bay moved to, never a
+    // keyword from the note ('STOP … resume to continue' must not sound like a resume).
+    const tr = text.match(/^([A-Z_]+)\s*\([^)]*\):\s*([A-Z]+)\s*->\s*([A-Z]+)/);
+    if (tr) {
+      const [, cmd, from, to] = tr;
+      if (from === to) return null;
+      if (to === 'ESTOPPED') return { text: 'Emergency stop. Arm locked.', priority: 'estop', key: 'estop' };
+      if (to === 'STOPPED') return { text: 'All stop. Arm holding.', priority: 'high', key: 'stop' };
+      if (to === 'SLOW') return { text: 'Slow mode. Half speed.', priority: 'high', key: 'slow' };
+      if (to === 'IDLE' && from === 'ESTOPPED') return { text: 'Emergency stop cleared.', priority: 'high', key: 'estop-clear' };
+      if (to === 'RUNNING' && cmd === 'CYCLE_START') return { text: 'Cycle start.', priority: 'high', key: 'cycle-start' };
+      if (to === 'RUNNING') return { text: 'Resuming. Arm is live.', priority: 'high', key: 'resume' };
+      return null;
+    }
     if (/e-?stop|emergency/.test(t)) {
       if (/clear|reset|releas|disengag|re-?arm/.test(t)) return { text: 'Emergency stop cleared.', priority: 'high', key: 'estop-clear' };
       return { text: 'Emergency stop. Arm locked.', priority: 'estop', key: 'estop' };

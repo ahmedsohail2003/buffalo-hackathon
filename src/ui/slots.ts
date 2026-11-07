@@ -22,9 +22,11 @@ interface SlotState {
   mission: Partial<Record<MissionSlotName, ComponentType>>;
   handExtras: { id: string; Component: ComponentType<HandPaneExtraProps> }[];
   teleop: TeleopController | null;
+  /** what the camera box shows in simulated-input mode (for example the simulated hand pad) */
+  simStage: ComponentType | null;
 }
 
-let state: SlotState = { mission: {}, handExtras: [], teleop: null };
+let state: SlotState = { mission: {}, handExtras: [], teleop: null, simStage: null };
 const subs = new Set<() => void>();
 const notify = () => subs.forEach((cb) => cb());
 const subscribe = (cb: () => void) => {
@@ -65,6 +67,17 @@ export function registerTeleopController(ctrl: TeleopController): () => void {
   return () => {
     if (state.teleop !== ctrl) return;
     state = { ...state, teleop: null };
+    notify();
+  };
+}
+
+/** Fill the camera box in simulated-input mode (it is only a placeholder there). Returns unregister. */
+export function registerSimStage(Component: ComponentType): () => void {
+  state = { ...state, simStage: Component };
+  notify();
+  return () => {
+    if (state.simStage !== Component) return;
+    state = { ...state, simStage: null };
     notify();
   };
 }

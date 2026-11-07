@@ -6,7 +6,7 @@ import type { TeleopStatus } from '../contracts';
 import { SimHandPad, type TeleopUiProps } from './SimHandPad';
 import './teleop.css';
 
-export function TeleopPanel({ teleop, mode }: TeleopUiProps) {
+export function TeleopPanel({ teleop, mode, toggle: showToggle = true, pad: showPad = true }: TeleopUiProps & { toggle?: boolean; pad?: boolean }) {
   const [st, setSt] = useState<TeleopStatus | null>(() => teleop?.status() ?? null);
   useEffect(() => {
     if (!teleop) return;
@@ -26,16 +26,21 @@ export function TeleopPanel({ teleop, mode }: TeleopUiProps) {
   return (
     <div className="teleop-panel">
       <div className="teleop-row">
+        {showToggle && (
         <button
           type="button"
           className={on ? 'teleop-toggle on' : 'teleop-toggle'}
           aria-pressed={on}
           disabled={!teleop}
           title="Steer the gripper with your hand; pinch to pick, pinch again to place"
-          onClick={toggle}
+          onClick={(e) => {
+            toggle();
+            e.currentTarget.blur(); // Space is the pinch: it must never press this button
+          }}
         >
           Hand teleop: {on ? 'ON' : 'OFF'}
         </button>
+        )}
         {st && (on || st.note) && (
           <div className={`teleop-chip mode-${st.mode}`} role="status" aria-live="polite">
             <span className="teleop-mode">{st.mode}</span>
@@ -51,7 +56,7 @@ export function TeleopPanel({ teleop, mode }: TeleopUiProps) {
           to pick or place.
         </div>
       )}
-      {on && mode === 'sim' && <SimHandPad teleop={teleop} mode={mode} />}
+      {showPad && on && mode === 'sim' && <SimHandPad teleop={teleop} mode={mode} />}
     </div>
   );
 }

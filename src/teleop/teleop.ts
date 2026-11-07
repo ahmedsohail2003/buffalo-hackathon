@@ -13,7 +13,9 @@ import { PinchDetector, fingersExtended, isPinchPose, mapToWorkspace, palmPoint,
 import { setPinchRatio, setTeleopStatus } from './state';
 
 /** A hand frame older than this is no hand at all (dead-man). */
-export const FRESH_MS = 250;
+/** A hand frame older than this counts as 'no hand' (dead-man hold). 600 ms tolerates a slow laptop's
+ * frame rate (a few fps) while still stopping the arm within about half a second of the hand leaving. */
+export const FRESH_MS = 600;
 /** A pinch picks the nearest unheld sample whose centre is this close (xy) to the hover target. */
 export const PICK_RADIUS = 0.035;
 /** The gesture vocabulary of the safety channel: a hand showing one of these is signalling, not steering. */

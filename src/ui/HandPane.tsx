@@ -37,6 +37,7 @@ function useTracker() {
 // ---- camera view with landmark overlay and dwell ring ----------------------------------------
 
 function CameraView() {
+  const SimStage = useSlots().simStage;
   const { tracker, status, error, fps } = useTracker();
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -143,7 +144,12 @@ function CameraView() {
         </span>
         {status === 'running' && <span className="chip num">{fps} fps</span>}
       </div>
-      {!live && (
+      {!live && PARAMS.sim && SimStage && (
+        <div className="cam-stage">
+          <SimStage />
+        </div>
+      )}
+      {!live && !(PARAMS.sim && SimStage) && (
         <div className="cam-empty">
           {PARAMS.sim ? (
             <>

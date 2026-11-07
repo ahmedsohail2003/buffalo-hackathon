@@ -6,6 +6,7 @@ import type { EgressNote, LogSource } from '../gemini/types';
 import { Announcer } from './announcer';
 import { getSpeaker } from './elevenSpeaker';
 import { playSfx } from './sfx';
+import { getServerHealth } from '../gemini/health';
 
 export function startAnnouncer(source: LogSource, log?: (line: LogLine) => void, egress?: (rec: EgressNote) => void): Announcer {
   const speaker = getSpeaker();
@@ -19,6 +20,22 @@ export function startAnnouncer(source: LogSource, log?: (line: LogLine) => void,
     },
   });
   announcer.attach(source);
+  // No speech requests until the server says ElevenLabs is configured (no failing calls in local dev);
+  // re-check every 30 s so starting the server mid-session brings the voice back.
+  speaker.markOffline();
+  let said = false;
+  const check = () =>
+    void getServerHealth({ refresh: true }).then((h) => {
+      if (h.elevenlabs) {
+        if (speaker.broken) speaker.repair();
+      } else {
+        speaker.markOffline();
+        if (!said && log) log({ t: Date.now(), kind: 'voice', text: 'Mission-control voice offline: start the server with an ElevenLabs key (npm run server). Events still show here.' });
+        said = true;
+      }
+    });
+  check();
+  if (typeof setInterval !== 'undefined') setInterval(check, 30_000);
   return announcer;
 }
 

@@ -71,7 +71,7 @@ export function cleanForSpeech(text: string): string {
 
 const QUINDAR_OPEN = 2525;
 const QUINDAR_CLOSE = 2475;
-const BROKEN_STATUSES = new Set([401, 402, 403, 404, 502, 503]);
+const BROKEN_STATUSES = new Set([401, 402, 403, 404, 500, 502, 503, 504]);
 
 export class ElevenSpeaker implements SpeakerLike {
   private readonly channel: AudioChannel;
@@ -129,6 +129,13 @@ export class ElevenSpeaker implements SpeakerLike {
   /** Clear the broken flag (for example after the server health check passes again). */
   repair(): void {
     this.isBroken = false;
+  }
+
+  /** Stop all speech until repair(): the health check found no ElevenLabs behind the server. */
+  markOffline(): void {
+    this.isBroken = true;
+    this.queue = [];
+    this.pending = '';
   }
 
   setMuted(m: boolean): void {
