@@ -58,7 +58,7 @@ LINKS = [  # (label, text shown, URL). Text that starts with "<" is drawn in amb
     ("VIDEO", "<YouTube link>", None),
 ]
 # Measured in the integrated app with SO-101 limits. Update these if the Fabricator changes.
-LIMITS = [("grip", "15–45 mm"), ("height", "≤ 45 mm"), ("mass", "≤ 90 g"), ("footprint", "≤ 60 mm")]
+LIMITS = [("grip", "15–45 mm"), ("height", "≤ 45 mm"), ("mass", "≤ 100 g"), ("footprint", "≤ 60 mm")]
 SCALED = {"name": "Iron meteorite", "designed": "38 mm, 204 g", "verdict": "too heavy", "scale": "×0.76",
           "result": "28.9 mm grip, 19 mm tall, 90 g"}
 REFUSED = {"name": "Antenna boom",
