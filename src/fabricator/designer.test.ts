@@ -91,6 +91,41 @@ describe('designer (Gemini proposes, code decides)', () => {
     expect(r.ok === false && r.code).toBe('TOO_CLOSE_TO');
   });
 
+  it('an emergency stop during the design cancels it: ABORTED, no preset fallback, nothing placed', async () => {
+    for (const repair of [false, true]) {
+      const bay = fakeBay();
+      const ac = new AbortController();
+      const answers: unknown[] = repair ? [NEEDLE] : [];
+      const gen: GenerateJson = async () => {
+        const next = answers.shift();
+        if (next) return { text: JSON.stringify(next), latencyMs: 5 };
+        ac.abort(); // the E-STOP lands while Gemini is still thinking
+        throw Object.assign(new Error('Gemini request cancelled'), { code: 'ABORTED' });
+      };
+      const r = await designAndFabricate(bay, 'an iron meteorite', undefined, { generateJson: gen }, ac.signal);
+      expect(r).toMatchObject({ ok: false, code: 'ABORTED' });
+      expect(bay.created).toEqual([]);
+    }
+  });
+
+  it('a design that lands while the bay is STOPPED or ESTOPPED is not placed (gemini or preset)', async () => {
+    for (const state of ['STOPPED', 'ESTOPPED'] as const) {
+      for (const answer of [BENNU, new Error('timeout 15000 ms')]) {
+        const bay = fakeBay();
+        let st = 'RUNNING';
+        bay.gate = { ...bay.gate, state: () => st as typeof state };
+        const gen: GenerateJson = async () => {
+          st = state; // the operator stops the bay mid-design
+          if (answer instanceof Error) throw answer;
+          return { text: JSON.stringify(answer), latencyMs: 5 };
+        };
+        const r = await designAndFabricate(bay, 'a fragment of Bennu', undefined, { generateJson: gen });
+        expect(r).toMatchObject({ ok: false, code: state === 'STOPPED' ? 'BAY_STOPPED' : 'BAY_ESTOPPED' });
+        expect(bay.created).toEqual([]);
+      }
+    }
+  });
+
   it('parseModelJson takes fenced or chatty JSON and refuses non-JSON', () => {
     expect(parseModelJson('```json\n{"a":1}\n```')).toEqual({ a: 1 });
     expect(parseModelJson('Here you go: {"a":{"b":2}} hope it helps')).toEqual({ a: { b: 2 } });

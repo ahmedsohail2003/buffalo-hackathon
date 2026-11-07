@@ -3,6 +3,7 @@ import type { GeminiCallEntry } from '../contracts';
 import type { SpeakerLike } from '../voice/elevenSpeaker';
 import { makeFakeBay, makeSample } from './__fixtures__/fakeBay';
 import { LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
+import type { ToolContext } from './tools';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -159,6 +160,29 @@ describe('Live voice session', () => {
     const instant = r.lastSent().filter(([k]) => k === 'tool')[1][1] as { functionResponses: Array<Record<string, unknown>> };
     expect(instant.functionResponses[0]).toMatchObject({ id: 'call-8', name: 'describe_bay', response: { ok: true } });
     expect(instant.functionResponses[0].scheduling).toBeUndefined();
+  });
+
+  it('an emergency stop aborts the signal of a long tool call in flight', async () => {
+    const r = rig();
+    let seen: AbortSignal | undefined;
+    const fabricate: NonNullable<ToolContext['fabricate']> = (_bay, _d, _p, _deps, signal) =>
+      new Promise((resolve) => {
+        seen = signal;
+        signal?.addEventListener('abort', () => resolve({ ok: false, code: 'ABORTED', reason: 'the request was cancelled, so no sample was made' }));
+      });
+    const live = new LiveVoice({ bay: r.bay, connector: async (_c, cb) => { cbs.push(cb); return { sendRealtimeInput() {}, sendClientContent() {}, sendToolResponse() {}, close() {} }; }, mic: { start: async () => {}, stop() {} }, player: { play() {}, stop() {}, resume: async () => {}, setMuted() {} }, tailMs: 0, tools: { fabricate }, recordEntry: () => {} });
+    const cbs: LiveCallbacksLite[] = [];
+    const lines: string[] = [];
+    live.events = { onTool: (l) => void lines.push(l) };
+    await live.connect();
+    cbs[0].onmessage({ toolCall: { functionCalls: [{ id: 'd1', name: 'design_sample', args: { description: 'a shard' } }] } });
+    await tick();
+    expect(seen?.aborted).toBe(false);
+    r.bay.setState('ESTOPPED');
+    await tick();
+    await tick();
+    expect(seen?.aborted).toBe(true);
+    expect(lines.some((l) => /design_sample\(.*\) failed: refused \(ABORTED\)/.test(l))).toBe(true);
   });
 
   it('while the bay is stopped a moving tool is refused at once and the arm never moves', async () => {

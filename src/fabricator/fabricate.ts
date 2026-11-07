@@ -146,13 +146,18 @@ export function placeFabricated(bay: BayApi, f: Fabricated, placement: Placement
   return { ok: true, sample: s, say: f.say + at, reasons: f.reasons, fab: f };
 }
 
-/** One click: fabricate a curated preset (NASA models are fetched first) and place it. */
-export async function fabricatePreset(bay: BayApi, presetId: string, placement?: Placement): Promise<Placed | FabRejection> {
+/**
+ * One click: fabricate a curated preset (NASA models are fetched first) and place it. mayPlace, if
+ * given, is asked right before placing and can refuse (the designer's fallback uses it).
+ */
+export async function fabricatePreset(bay: BayApi, presetId: string, placement?: Placement, mayPlace?: () => Rejection | null): Promise<Placed | FabRejection> {
   const preset = PRESETS.find((p) => p.id === presetId);
   if (!preset) return { ok: false, code: 'NO_PRESET', reason: `there is no preset called ${presetId}`, suggestion: `try one of: ${PRESETS.map((p) => p.id).join(', ')}` };
   await ensureAssets(preset.program);
   const f = fabricateProgram(preset.program, preset.source);
   if (!f.ok) return f;
+  const refused = mayPlace?.();
+  if (refused) return refused;
   return placeFabricated(bay, f, placement, 'preset');
 }
 

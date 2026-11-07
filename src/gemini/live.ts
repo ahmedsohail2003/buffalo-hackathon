@@ -572,7 +572,13 @@ export class LiveVoice {
       }
       this.respond(fc.id, name, { ok: true, status: 'started', note: 'Running now. The result follows as a [BAY EVENT] message.' }, 'SILENT');
       this.events.onTool?.(`${name}(${formatArgs(args)}) started`);
-      void dispatchTool(this.bay, name, args, 'live', this.toolCtx()).then((result) => {
+      // An emergency stop cancels the call in flight (a design then places nothing).
+      const ac = new AbortController();
+      const offGate = this.bay.gate.onChange((s) => {
+        if (s === 'ESTOPPED') ac.abort();
+      });
+      void dispatchTool(this.bay, name, args, 'live', { ...this.toolCtx(), signal: ac.signal }).then((result) => {
+        offGate();
         const line = `${name}(${formatArgs(args)}) ${result.ok ? 'succeeded' : 'failed'}: ${summarizeResult(name, result)}`;
         this.events.onTool?.(line);
         this.sendBayEvent(line);
