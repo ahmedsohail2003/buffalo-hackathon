@@ -1,19 +1,35 @@
 // The latest hand result (camera or simulated). Module-level on purpose: teleop and the app loop
-// read it every tick without going through React state.
+// read it every tick without going through React state. null means no hand in view.
 import type { HandFrame, HandLandmark } from '../contracts';
 
 let latest: HandFrame | null = null;
 let seq = 0;
+const listeners = new Set<(frame: HandFrame | null) => void>();
 
-/** Publish a new hand result. Call once per processed video frame, also when no hand is seen. */
-export function setHandFrame(frame: HandFrame): void {
+/** Publish the hand result for one processed video frame: the frame, or null when no hand is seen. */
+export function setHandFrame(frame: HandFrame | null): void {
   latest = frame;
   seq += 1;
+  for (const cb of listeners) {
+    try {
+      cb(frame);
+    } catch (err) {
+      console.error('[hand] listener failed', err);
+    }
+  }
 }
 
-/** The latest hand result, or null before the first frame. */
+/** The latest hand result, or null when no hand is in view (or before the first frame). */
 export function getHandFrame(): HandFrame | null {
   return latest;
+}
+
+/** Called on every published frame (also null ones), for example to forward frames to teleop. */
+export function onHandFrame(cb: (frame: HandFrame | null) => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
 }
 
 /** Increments on every setHandFrame, so a reader can tell a new frame from a repeated one. */
@@ -22,18 +38,12 @@ export function handFrameSeq(): number {
 }
 
 export function clearHandFrame(): void {
-  latest = null;
-  seq += 1;
+  setHandFrame(null);
 }
 
 /** True when the frame is recent and holds a full hand (21 landmarks). */
 export function isHandPresent(frame: HandFrame | null, now: number, maxAgeMs = 250): frame is HandFrame {
   return !!frame && now - frame.t <= maxAgeMs && frame.landmarks.length >= 21;
-}
-
-/** A frame with no hand in view. */
-export function emptyHandFrame(t: number, source: HandFrame['source']): HandFrame {
-  return { t, landmarks: [], gesture: null, gestureScore: 0, source };
 }
 
 function toLandmarks(v: unknown): HandLandmark[] {
