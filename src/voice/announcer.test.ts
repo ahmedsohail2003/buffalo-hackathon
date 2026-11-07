@@ -44,6 +44,7 @@ describe('announcer rules', () => {
     expect(calloutFor(line('safety', 'RESUME (thumbs up)'))?.text).toBe('Resuming. Arm is live.');
     expect(calloutFor(line('safety', 'SLOW mode'))?.text).toBe('Slow mode. Half speed.');
     expect(calloutFor(line('info', 'released Bennu fragment on the containment'))?.text).toBe('Bennu fragment secured in containment.');
+    expect(calloutFor(line('info', 'released sample cube on the containment'))?.text).toBe('Sample cube secured in containment.');
     expect(calloutFor(line('gemini', '[coworker] place_in_containment -> ok, s1 released over containment (registry: inside)'))).toBeNull();
     expect(calloutFor(line('gemini', '[coworker] place_in_containment -> ok, s1 released over containment (registry: NOT inside)'))).toBeNull();
     expect(calloutFor(line('reject', 'Fabricator: too heavy at 140 g; the limit is 100 g. Try a smaller one.'))?.text).toBe(
