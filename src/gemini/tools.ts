@@ -138,7 +138,14 @@ let defaults: ToolContext = {};
 
 /** App-wide tool wiring: the log sink, the fabricator, the containment predicate. */
 export function configureTools(ctx: ToolContext): void {
-  defaults = { ...defaults, ...ctx };
+  defaults = { ...defaults, ...defined(ctx) };
+}
+
+/** Drop undefined values so an unset field never overrides a configured one. */
+function defined<T extends object>(o: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [k, v] of Object.entries(o)) if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  return out;
 }
 
 export const FABRICATOR_OFFLINE: ToolResult = {
@@ -349,7 +356,7 @@ export async function dispatchTool(
   source: ToolSource,
   ctx: ToolContext = {},
 ): Promise<ToolResult> {
-  const c: ToolContext = { containmentMm: [...BAY_FACTS.containmentMm], inContainment: defaultInContainment, ...defaults, ...ctx };
+  const c: ToolContext = { containmentMm: [...BAY_FACTS.containmentMm], inContainment: defaultInContainment, ...defined(defaults), ...defined(ctx) };
   const a = args && typeof args === 'object' ? args : {};
   logTo(c.sink, 'gemini', `[${source}] ${name}(${formatArgs(a)})`);
   let result: ToolResult;

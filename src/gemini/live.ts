@@ -269,7 +269,7 @@ export class LiveVoice {
   constructor(opts: LiveVoiceOptions) {
     this.bay = opts.bay;
     this.sink = opts.sink ?? opts.tools?.sink ?? null;
-    this.toolCtx = { ...opts.tools, sink: this.sink };
+    this.toolCtx = { ...opts.tools, ...(this.sink ? { sink: this.sink } : {}) };
     this.speaker = opts.speaker ?? null;
     this.output = opts.output ?? (opts.speaker ? 'elevenlabs' : 'native');
     this.connector = opts.connector ?? defaultConnector();

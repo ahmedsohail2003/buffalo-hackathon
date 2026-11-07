@@ -141,7 +141,7 @@ export class Coworker {
           if (ac.signal.aborted) break;
           const name = fc.name ?? '';
           const args = fc.args ?? {};
-          const result = await dispatchTool(this.bay, name, args, 'coworker', { ...this.opts.tools, sink, signal: ac.signal });
+          const result = await dispatchTool(this.bay, name, args, 'coworker', { ...this.opts.tools, ...(sink ? { sink } : {}), signal: ac.signal });
           const trace: ToolTrace = { name, args, result, summary: summarizeResult(name, result) };
           traces.push(trace);
           try {

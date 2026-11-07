@@ -158,3 +158,18 @@ describe('tools: dispatch', () => {
     for (const d of TOOL_DECLARATIONS) if (d.parameters) expect(d.parameters.type).toBe('OBJECT');
   });
 });
+
+describe('tools: app-wide wiring', () => {
+  it('configureTools sets defaults that an unset per-call field never overrides', async () => {
+    const { configureTools } = await import('./tools');
+    const lines: LogLine[] = [];
+    configureTools({ sink: { log: (l) => lines.push(l), ledger() {} } });
+    try {
+      const bay = makeFakeBay({ samples: [bennu] });
+      await dispatchTool(bay, 'bay_status', {}, 'coworker', { sink: undefined, fabricate: undefined });
+      expect(lines.map((l) => l.text)).toEqual(['[coworker] bay_status()', '[coworker] bay_status -> bay RUNNING, arm idle, holding nothing']);
+    } finally {
+      configureTools({ sink: null });
+    }
+  });
+});
