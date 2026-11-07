@@ -134,6 +134,27 @@ describe('measureGeometry (what the jaw meets)', () => {
     expect(Math.abs(baked.d * 1000 - 30)).toBeLessThan(0.5);
   });
 
+  it('a tapered cone is measured where the fingertips meet it, not at its vertices', () => {
+    // 56 mm across at the base, 20 mm at the top: the only vertices are at z 0 and z 20, but the
+    // fingertip plane (about 2 mm up) cuts the cone at about 51 mm, over the 45 mm jaw limit.
+    const cone = prog([{ kind: 'cone', radius_mm: 28, radius2_mm: 10, height_mm: 20 }]);
+    const m = measure(cone);
+    expect(m.graspWidthMm).toBeGreaterThan(45);
+    expect(m.graspWidthMm).toBeLessThan(56);
+    const r = fitToGripper(m);
+    if (r.ok) expect(m.graspWidthMm * r.scale).toBeLessThanOrEqual(SAMPLE_LIMITS.graspTargetMaxMm + 1e-6);
+    const f = fabricateProgram(cone, 'gemini');
+    if (f.ok) {
+      // what the registry is told matches a slice of the baked mesh at the fingertip plane
+      expect(f.mesh.graspWidthMm).toBeLessThanOrEqual(SAMPLE_LIMITS.graspMaxMm);
+      expect(f.scale).toBeLessThan(0.9);
+    }
+    // a pointed cone has no vertex in the band but the apex: it is about 24 mm across there, not empty
+    const pointed = measure(prog([{ kind: 'cone', radius_mm: 14, radius2_mm: 0, height_mm: 30 }]));
+    expect(pointed.graspWidthMm).toBeGreaterThan(20);
+    expect(fitToGripper(pointed).ok).toBe(true);
+  });
+
   it('the NASA Eros model is narrow along y: baking turns it so the jaw closes across its waist', () => {
     const f = fabricateProgram(PRESETS.find((p) => p.id === 'nasa_eros')!.program, 'nasa');
     expect(f.ok).toBe(true);

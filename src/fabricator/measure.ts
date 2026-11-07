@@ -54,21 +54,38 @@ export function measureGeometry(g: BufferGeometry, densityGcm3: number): Measure
   const w = x1 - x0, d = y1 - y0, h = z1 - z0;
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
 
-  // fingertip band: everything from the fingertips up to the top
+  // fingertip band: everything from the fingertips up to the top. Vertices alone are not enough: a
+  // cone, frustum or sparse lathe is widest exactly at the fingertip plane, where it may have no
+  // vertex. So the band also takes the point where every triangle edge crosses that plane.
   const tip = z0 + fingertipHeightMm(h * 1000) / 1000;
-  let m = 0;
-  for (let i = 0; i < n; i++) if (a[i * 3 + 2] >= tip) m++;
-  const useAll = m < 3;
-  const xs = new Float64Array(useAll ? n : m), ys = new Float64Array(useAll ? n : m);
-  let k = 0, r2 = 0;
+  const idx = g.index ? (g.index.array as ArrayLike<number>) : null;
+  const tris = idx ? idx.length / 3 : n / 3;
+  const vert = (t: number, c: number) => (idx ? idx[t * 3 + c] : t * 3 + c);
+  const bx: number[] = [], by: number[] = [];
+  let r2 = 0;
   for (let i = 0; i < n; i++) {
     const x = a[i * 3] - cx, y = a[i * 3 + 1] - cy;
     r2 = Math.max(r2, x * x + y * y);
-    if (useAll || a[i * 3 + 2] >= tip) {
-      xs[k] = x;
-      ys[k] = y;
-      k++;
+    if (a[i * 3 + 2] >= tip) {
+      bx.push(x);
+      by.push(y);
     }
+  }
+  for (let t = 0; t < tris; t++) {
+    for (let e = 0; e < 3; e++) {
+      const p = vert(t, e), q = vert(t, (e + 1) % 3);
+      const pz = a[p * 3 + 2], qz = a[q * 3 + 2];
+      if ((pz < tip) === (qz < tip)) continue; // both on the same side of the plane
+      const f = (tip - pz) / (qz - pz);
+      bx.push(a[p * 3] + f * (a[q * 3] - a[p * 3]) - cx);
+      by.push(a[p * 3 + 1] + f * (a[q * 3 + 1] - a[p * 3 + 1]) - cy);
+    }
+  }
+  const useAll = bx.length < 3;
+  const xs = new Float64Array(useAll ? n : bx.length), ys = new Float64Array(useAll ? n : bx.length);
+  for (let i = 0; i < xs.length; i++) {
+    xs[i] = useAll ? a[i * 3] - cx : bx[i];
+    ys[i] = useAll ? a[i * 3 + 1] - cy : by[i];
   }
   let best = Infinity, bestT = 0;
   const step = Math.PI / 90; // 2 degrees
@@ -91,8 +108,6 @@ export function measureGeometry(g: BufferGeometry, densityGcm3: number): Measure
   const alongX = extent(xs, ys, 0);
 
   // volume + centre of mass by the divergence theorem over the triangles
-  const idx = g.index ? (g.index.array as ArrayLike<number>) : null;
-  const tris = idx ? idx.length / 3 : n / 3;
   let vol = 0, mx = 0, my = 0;
   for (let t = 0; t < tris; t++) {
     const i0 = idx ? idx[t * 3] : t * 3, i1 = idx ? idx[t * 3 + 1] : t * 3 + 1, i2 = idx ? idx[t * 3 + 2] : t * 3 + 2;
