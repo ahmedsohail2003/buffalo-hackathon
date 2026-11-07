@@ -180,7 +180,10 @@ export const HOME_Q: number[] = [0, -1.2, 0.9, 1.65, 0, JAW_OPEN];
 // ---------- attach rule ----------
 /** a closing jaw attaches a sample whose centre is within this of the TCP in xy (m) */
 export const ATTACH_XY_TOL = 0.015;
-/** ... and whose bottom is between ATTACH_BAND[0] below and ATTACH_BAND[1] above... (m below tcp) */
+/**
+ * ... and whose bottom is between ATTACH_BAND[0] and ATTACH_BAND[1] metres below the TCP (a sample
+ * grasped on the deck has its bottom graspZ(h) = 8-17.5 mm below the TCP)
+ */
 export const ATTACH_BAND: [number, number] = [-0.002, 0.03];
 
 // ---------- registry ----------
