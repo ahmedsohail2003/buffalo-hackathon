@@ -80,8 +80,6 @@ export class ElevenSpeaker implements SpeakerLike {
   private readonly quindar: boolean;
   private readonly idleFlushMs: number;
   private readonly endFlushMs: number;
-  private readonly onError?: (message: string) => void;
-  private readonly onEgress?: (chars: number) => void;
   private pending = '';
   private pendingVoice: VoiceName = 'coworker';
   private queue: Array<{ text: string; voice: VoiceName }> = [];
@@ -95,6 +93,9 @@ export class ElevenSpeaker implements SpeakerLike {
   private isMuted = false;
   private isBroken = false;
   onState: ((speaking: boolean) => void) | null = null;
+  /** settable later: the shared speaker may be created before the app wires its log */
+  onError: ((message: string) => void) | undefined;
+  onEgress: ((chars: number) => void) | undefined;
 
   constructor(opts: SpeakerOptions = {}) {
     this.url = opts.url ?? '/api/tts';
