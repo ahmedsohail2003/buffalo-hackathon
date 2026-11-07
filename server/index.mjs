@@ -51,6 +51,9 @@ export function loadConfig(env = process.env) {
       tokenApiVersion: env.GEMINI_TOKEN_API_VERSION || 'v1alpha',
       liveApiVersion: env.GEMINI_LIVE_API_VERSION || 'v1alpha',
       storeFalse: env.GEMINI_STORE_FALSE === '1',
+      /** per-request ceilings forced on every generate call (the app itself stays far below them) */
+      maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 8192),
+      maxThinkingBudget: int(env.GEMINI_MAX_THINKING_BUDGET, 4096),
     },
     el: {
       key: env.ELEVENLABS_API_KEY || '',
@@ -60,8 +63,11 @@ export function loadConfig(env = process.env) {
     },
     /** requests per IP per minute */
     limits: { tts: int(env.RATE_TTS, 90), gemini: int(env.RATE_GEMINI, 40), token: int(env.RATE_LIVE_TOKEN, 10) },
-    /** request body caps, bytes */
-    caps: { tts: 8 * 1024, gemini: int(env.GEMINI_BODY_CAP, 8 * 1024 * 1024), token: 64 * 1024 },
+    /**
+     * request body caps, bytes. The largest request the app sends is one 768 x 768 bay-camera JPEG
+     * as base64 (about 180 KB) plus a short prompt, so 1 MiB leaves a wide margin.
+     */
+    caps: { tts: 8 * 1024, gemini: int(env.GEMINI_BODY_CAP, 1024 * 1024), token: 64 * 1024 },
   };
 }
 
@@ -239,6 +245,54 @@ async function handleTts(req, res, cfg, ctx) {
 
 // ---- /api/gemini/* --------------------------------------------------------------------------
 
+/** Tools that bill per use or pull in outside content. The app only declares its own functions. */
+const PAID_TOOLS = ['googleSearch', 'google_search', 'googleSearchRetrieval', 'google_search_retrieval', 'urlContext', 'url_context', 'codeExecution', 'code_execution'];
+
+/** Read a field under its camelCase or snake_case JSON name, and keep only the camelCase one. */
+function takeField(obj, camel, snake) {
+  const v = obj[camel] ?? obj[snake];
+  delete obj[snake];
+  return v;
+}
+
+/**
+ * Put a ceiling on what one generate call can cost, whatever the browser sent: one candidate,
+ * bounded output (thinking counts as output) and thinking budget, and no search, URL or code tools.
+ * Mutates and returns the parsed request body.
+ */
+export function clampGenerateRequest(body, limits) {
+  const raw = takeField(body, 'generationConfig', 'generation_config');
+  const gc = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  takeField(gc, 'candidateCount', 'candidate_count');
+  gc.candidateCount = 1;
+  const asked = Number(takeField(gc, 'maxOutputTokens', 'max_output_tokens'));
+  gc.maxOutputTokens = Number.isFinite(asked) && asked > 0 ? Math.min(Math.floor(asked), limits.maxOutputTokens) : limits.maxOutputTokens;
+  const tc = takeField(gc, 'thinkingConfig', 'thinking_config');
+  if (tc && typeof tc === 'object' && !Array.isArray(tc)) {
+    const budget = takeField(tc, 'thinkingBudget', 'thinking_budget');
+    if (budget !== undefined) {
+      const b = Number(budget);
+      // -1 asks for dynamic (unbounded) thinking; 0 turns it off
+      tc.thinkingBudget = Number.isFinite(b) && b >= 0 ? Math.min(Math.floor(b), limits.maxThinkingBudget) : limits.maxThinkingBudget;
+    }
+    gc.thinkingConfig = tc;
+  }
+  body.generationConfig = gc;
+  const tools = body.tools;
+  delete body.tools;
+  if (Array.isArray(tools)) {
+    const kept = [];
+    for (const t of tools) {
+      if (!t || typeof t !== 'object' || Array.isArray(t)) continue;
+      const copy = { ...t };
+      for (const k of PAID_TOOLS) delete copy[k];
+      if (Object.keys(copy).length) kept.push(copy);
+    }
+    if (kept.length) body.tools = kept;
+  }
+  return body;
+}
+
 const GEMINI_ROUTE = /^\/api\/gemini\/(v1beta|v1alpha|v1)\/models\/([A-Za-z0-9._-]+):(generateContent|streamGenerateContent|countTokens)$/;
 
 async function handleGemini(req, res, cfg, ctx, url) {
@@ -260,12 +314,17 @@ async function handleGemini(req, res, cfg, ctx, url) {
   if (wait) return sendJson(res, 429, { error: 'rate_limited', retry_after_s: wait }, { 'retry-after': String(wait) });
 
   let body = await readBody(req, cfg.caps.gemini);
-  if (cfg.gemini.storeFalse && method !== 'countTokens') {
+  if (method !== 'countTokens') {
+    let parsed;
     try {
-      body = Buffer.from(JSON.stringify({ ...JSON.parse(body.toString('utf8') || '{}'), store: false }));
+      parsed = JSON.parse(body.toString('utf8') || '{}');
     } catch {
       throw new HttpError(400, 'bad_json');
     }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'bad_json');
+    clampGenerateRequest(parsed, cfg.gemini);
+    if (cfg.gemini.storeFalse) parsed.store = false;
+    body = Buffer.from(JSON.stringify(parsed));
   }
   const alt = url.searchParams.get('alt');
   const query = method === 'streamGenerateContent' && alt === 'sse' ? '?alt=sse' : '';

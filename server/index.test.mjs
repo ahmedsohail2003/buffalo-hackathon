@@ -179,6 +179,40 @@ describe('Gemini proxy', () => {
     expect(rest).toContain('Flight');
   });
 
+  it('puts a ceiling on each request: one candidate, bounded output and thinking, no search, URL or code tools', async () => {
+    expect(loadConfig({}).caps.gemini).toBe(1024 * 1024);
+    const base = await start({ GEMINI_API_KEY: GEMINI_KEY });
+    const url = `${base}/api/gemini/v1beta/models/gemini-3.8-flash:generateContent`;
+    const fn = { functionDeclarations: [{ name: 'bay_status', description: 'Bay state.' }] };
+    const r = await post(url, {
+      contents: [{ parts: [{ text: 'hi' }] }],
+      generationConfig: { candidateCount: 8, maxOutputTokens: 65536, thinkingConfig: { thinkingBudget: 32768 }, responseMimeType: 'application/json' },
+      tools: [{ googleSearch: {} }, { urlContext: {} }, { codeExecution: {} }, fn],
+    });
+    expect(r.status).toBe(200);
+    let call = upstream.seen.findLast((s) => s.path.includes(':generateContent'));
+    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 }, responseMimeType: 'application/json' });
+    expect(call.body.tools).toEqual([fn]);
+
+    // snake_case field names reach the same fields upstream, so they are clamped too; -1 (dynamic) is bounded
+    await post(url, { contents: [], generation_config: { candidate_count: 4, max_output_tokens: 99999, thinking_config: { thinking_budget: -1 } }, tools: [{ google_search: {} }] });
+    call = upstream.seen.findLast((s) => s.path.includes(':generateContent'));
+    expect(call.body.generation_config).toBeUndefined();
+    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 4096 } });
+    expect(call.body.tools).toBeUndefined();
+
+    // what the app sends is left alone apart from the ceilings: a thinking level gets no budget added
+    await post(url, { contents: [], generationConfig: { thinkingConfig: { thinkingLevel: 'LOW' }, maxOutputTokens: 300 } });
+    call = upstream.seen.findLast((s) => s.path.includes(':generateContent'));
+    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 300, thinkingConfig: { thinkingLevel: 'LOW' } });
+
+    const low = await start({ GEMINI_API_KEY: GEMINI_KEY, GEMINI_MAX_OUTPUT_TOKENS: '100', GEMINI_MAX_THINKING_BUDGET: '50' });
+    await post(`${low}/api/gemini/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse`, { contents: [], generationConfig: { thinkingConfig: { thinkingBudget: 9000 } } });
+    call = upstream.seen.findLast((s) => s.path.includes(':streamGenerateContent'));
+    expect(call.body.generationConfig).toEqual({ candidateCount: 1, maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 50 } });
+    expect((await post(url, 'not json')).status).toBe(400);
+  });
+
   it('rate-limits per IP and caps the body', async () => {
     const base = await start({ GEMINI_API_KEY: GEMINI_KEY, RATE_GEMINI: '1', GEMINI_BODY_CAP: '2048' });
     const url = `${base}/api/gemini/v1beta/models/gemini-3.8-flash:generateContent`;
