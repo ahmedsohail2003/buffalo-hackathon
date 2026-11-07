@@ -1,5 +1,5 @@
 // The app runtime: owns the bay core, runs the loop, feeds the safety machine and exposes the
-// public BayApi. One instance per page, created on first use.
+// public BayApi. One instance per page, created by bootRuntime() before the UI renders.
 //
 // Each tick, in order:
 //   1. safety: the keypad or the latest hand frame -> label filter -> dwell machine -> gate
@@ -8,11 +8,22 @@
 //   4. scene sync and viewer render (when a scene is attached)
 // A requestAnimationFrame loop drives it; a ~30 Hz interval takes over when RAF stalls.
 import type { BayApi, BayState, FrameCapture, HandFrame, Vec3 } from '../contracts';
+import {
+  BAY_CAMERA,
+  CONTAINMENT_FLOOR_Z,
+  CONTAINMENT_INNER,
+  CONTAINMENT_WALL_H,
+  CONTAINMENT_WALL_T,
+  CONTAINMENT_XY,
+  createBay,
+  loadArmData,
+  type So101Data,
+} from '../core';
 import { BayCameraModel } from '../scene/bayCamera';
-import type { BayCore, ResetResult, SafetySignal, SignalSource } from './bayTypes';
-import { log } from './bus';
+import { stationArmMeshFactory } from '../scene/armLook';
+import type { BayCore, BayLayout, ResetResult, SafetySignal, SignalSource } from './bayTypes';
+import { log, type LogKind } from './bus';
 import { getHandFrame, normalizeHandFrame, setHandFrame } from './hand';
-import { createMockBay } from './mockBay';
 import { PARAMS } from './params';
 import { DwellMachine, type SafetySnapshot } from './safetyAdapter';
 
@@ -48,8 +59,23 @@ export interface Telemetry {
   heldName: string | null;
   busy: boolean;
   fps: number;
-  mock: boolean;
 }
+
+/** The bay geometry the scene draws, from the core's constants. */
+export const BAY_LAYOUT: BayLayout = {
+  deckSize: 1.2,
+  deckCenter: [0, -0.05],
+  containment: {
+    x: CONTAINMENT_XY[0],
+    y: CONTAINMENT_XY[1],
+    innerW: CONTAINMENT_INNER,
+    innerD: CONTAINMENT_INNER,
+    wallH: CONTAINMENT_WALL_H,
+    wallT: CONTAINMENT_WALL_T,
+    floorZ: CONTAINMENT_FLOOR_Z,
+  },
+  bayCamera: { pos: BAY_CAMERA.pos, target: BAY_CAMERA.target, fovDeg: BAY_CAMERA.fovDeg },
+};
 
 const HAND_STALE_MS = 300;
 const TELEMETRY_MS = 100;
@@ -80,20 +106,23 @@ class Runtime {
   private lastCaptureAt: number | null = null;
   private captureSubs = new Set<() => void>();
 
-  constructor() {
-    this.core = createMockBay();
-    this.bayCamera = new BayCameraModel(this.core.layout.bayCamera);
-    const core = this.core;
+  constructor(data: So101Data) {
+    const bay = createBay(data, {
+      log: (text, kind) => log(kind as LogKind, text),
+      meshFactory: typeof document === 'undefined' ? undefined : stationArmMeshFactory,
+    });
+    this.core = { arm: bay.arm, samples: bay.samples, gate: bay.gate, model: bay.model, layout: BAY_LAYOUT };
+    this.bayCamera = new BayCameraModel(BAY_LAYOUT.bayCamera);
     this.bay = {
-      arm: core.arm,
-      samples: core.samples,
-      gate: core.gate,
+      arm: bay.arm,
+      samples: bay.samples,
+      gate: bay.gate,
       capture: () => this.capture(),
       project: (p) => this.bayCamera.project(p),
       unproject: (yx, z) => this.bayCamera.unproject(yx, z),
     };
     this.telemetry = this.readTelemetry();
-    core.gate.onChange(() => this.publishTelemetry(true));
+    bay.gate.onChange(() => this.publishTelemetry(true));
   }
 
   // ---- loop ---------------------------------------------------------------------------------
@@ -105,7 +134,7 @@ class Runtime {
     this.fpsSince = this.lastTick;
     const loop = (t: number) => {
       if (!this.running) return;
-      this.tick(t);
+      this.tick(Math.max(t, this.lastTick));
       this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
@@ -147,7 +176,7 @@ class Runtime {
     }
 
     // 3. arm
-    this.core.stepArm(dt, this.core.gate.speedFactor());
+    this.core.arm.step(dt, this.core.gate.speedFactor());
 
     // 4. scene
     if (this.scene && !(typeof document !== 'undefined' && document.hidden)) {
@@ -213,21 +242,26 @@ class Runtime {
     this.feedSafety(now);
   }
 
+  /** A fired hand signal or a panel button. The gate logs the result; ESTOP aborts every move. */
   applySignal(signal: SafetySignal, source: SignalSource): void {
-    const before = this.core.gate.state();
-    this.core.applySignal(signal, source);
-    const after = this.core.gate.state();
-    if (after === before) log('safety', `${signal.replace('_', ' ')} from ${source}: bay stays ${after}`);
+    this.core.gate.apply(signal, source);
   }
 
-  resetEstop(source: SignalSource): ResetResult {
-    const frame = getHandFrame();
-    const fistHeld = this.simGesture === 'Closed_Fist' || (!!frame && performance.now() - frame.t <= HAND_STALE_MS && frame.gesture === 'Closed_Fist');
-    if (fistHeld) {
+  /** True while a fist is held (camera or keypad): it keeps the bay stopped, whatever the panel says. */
+  fistHeld(now: number = performance.now()): boolean {
+    if (this.simGesture === 'Closed_Fist') return true;
+    const f = getHandFrame();
+    return !!f && now - f.t <= HAND_STALE_MS && f.gesture === 'Closed_Fist';
+  }
+
+  /** Two-step E-STOP reset from the panel: 'arm' (bay is clear), then 'confirm' (back to IDLE). */
+  resetEstop(step: 'arm' | 'confirm', source: SignalSource = 'panel'): ResetResult {
+    if (this.fistHeld()) {
       log('safety', 'E-STOP reset refused: a fist is still held (hand signals override the panel)');
       return { ok: false, reason: 'A fist is still held. Hand signals override the panel.' };
     }
-    return this.core.resetEstop(source);
+    const r = this.core.gate.apply(step === 'arm' ? 'RESET_ARM' : 'RESET_CONFIRM', source);
+    return r.ok ? { ok: true } : { ok: false, reason: r.note };
   }
 
   // ---- hooks and scene ----------------------------------------------------------------------
@@ -297,7 +331,6 @@ class Runtime {
       heldName: held?.name ?? null,
       busy: snap.busy,
       fps: this.fps,
-      mock: this.core.mock,
     };
   }
 
@@ -329,20 +362,42 @@ class Runtime {
   }
 }
 
-let instance: Runtime | null = null;
+export type { Runtime };
 
-/** The page's runtime (created on first call). */
-export function getRuntime(): Runtime {
-  if (!instance) {
-    instance = new Runtime();
-    if (PARAMS.sim) log('info', 'Simulated hand input (?sim=1): the camera stays off');
-    if (instance.core.mock) log('info', 'Bay online with a stand-in arm core');
-    installDevGlobals(instance);
+let instance: Runtime | null = null;
+let booting: Promise<Runtime> | null = null;
+
+/**
+ * Create the page's runtime: load the SO-101 model, build the bay core. Call once before the UI
+ * renders (main.tsx does). Pass data to skip the fetch (tests).
+ */
+export function bootRuntime(data?: So101Data): Promise<Runtime> {
+  if (instance) return Promise.resolve(instance);
+  if (!booting) {
+    booting = (data ? Promise.resolve(data) : loadArmData(`${import.meta.env.BASE_URL}assets/so101.json`)).then((d) => {
+      instance = new Runtime(d);
+      if (PARAMS.sim) log('info', 'Simulated hand input (?sim=1): the camera stays off');
+      log('info', 'Bay online: SO-101 arm core loaded');
+      installDevGlobals(instance);
+      return instance;
+    });
+    booting.catch(() => (booting = null));
   }
+  return booting;
+}
+
+/** The page's runtime. Throws before bootRuntime() has finished. */
+export function getRuntime(): Runtime {
+  if (!instance) throw new Error('The bay runtime is not booted yet (bootRuntime() first)');
   return instance;
 }
 
-export type { Runtime };
+/** Tests only: drop the runtime so the next boot builds a fresh one. */
+export function resetRuntimeForTests(): void {
+  instance?.stop();
+  instance = null;
+  booting = null;
+}
 
 /** Run a function every tick before the arm steps (teleop plugs in here). Returns unregister. */
 export function registerTickHook(fn: TickHook): () => void {

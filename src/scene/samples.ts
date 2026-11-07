@@ -1,5 +1,5 @@
 // Sample meshes: one per registry entry. The registry is ground truth; this layer only draws it.
-// Held samples ride on the tool-centre frame from the moment the jaw closes on them.
+// Poses are read every frame (the core moves a held sample with the jaw without emitting onChange).
 import * as THREE from 'three';
 import type { Sample, SampleApi } from '../contracts';
 import { buildRegisteredSample, onSampleGeometryChange } from './registry';
@@ -14,8 +14,6 @@ interface Item {
   ownsGeometry: boolean;
   /** drawn as the placeholder while a registered factory has nothing yet */
   placeholder: boolean;
-  /** sample pose in the tool-centre frame while held */
-  attach: THREE.Matrix4 | null;
 }
 
 const keyCache = new WeakMap<Sample, string>();
@@ -92,25 +90,20 @@ export class SampleLayer {
   private dirty = true;
   private lastRetry = 0;
   private offs: (() => void)[] = [];
-  private tmpInv = new THREE.Matrix4();
-  private tmpM = new THREE.Matrix4();
-  private tmpQ = new THREE.Quaternion();
-  private tmpS = new THREE.Vector3(1, 1, 1);
-  private zAxis = new THREE.Vector3(0, 0, 1);
 
   constructor(private api: SampleApi) {
     this.group.name = 'samples';
     this.offs.push(api.onChange(() => (this.dirty = true)));
     this.offs.push(
       onSampleGeometryChange(() => {
-        for (const item of this.items.values()) item.key = ''; // rebuild every mesh, keep held offsets
+        for (const item of this.items.values()) item.key = ''; // rebuild every mesh
         this.dirty = true;
       }),
     );
   }
 
-  /** Bring meshes in line with the registry and place them; tcp is the tool-centre frame. */
-  sync(tcp: THREE.Matrix4, now: number): void {
+  /** Bring meshes in line with the registry and place them at their current poses. */
+  sync(now: number): void {
     if (this.dirty) this.reconcile();
     if (now - this.lastRetry > RETRY_MS) {
       this.lastRetry = now;
@@ -124,24 +117,11 @@ export class SampleLayer {
       }
       if (this.dirty) this.reconcile();
     }
-    for (const [id, item] of this.items) {
-      const s = this.api.get(id);
-      if (!s) continue;
-      const mesh = item.mesh;
-      if (s.held) {
-        if (!item.attach) {
-          this.tmpQ.setFromAxisAngle(this.zAxis, s.yaw);
-          this.tmpM.compose(new THREE.Vector3(...s.pos), this.tmpQ, this.tmpS);
-          item.attach = this.tmpInv.copy(tcp).invert().multiply(this.tmpM).clone();
-        }
-        this.tmpM.multiplyMatrices(tcp, item.attach);
-        this.tmpM.decompose(mesh.position, mesh.quaternion, mesh.scale);
-      } else {
-        item.attach = null;
-        mesh.position.set(s.pos[0], s.pos[1], s.pos[2]);
-        mesh.quaternion.setFromAxisAngle(this.zAxis, s.yaw);
-        mesh.scale.set(1, 1, 1);
-      }
+    for (const s of this.api.list()) {
+      const mesh = this.items.get(s.id)?.mesh;
+      if (!mesh) continue;
+      mesh.position.set(s.pos[0], s.pos[1], s.pos[2]);
+      mesh.rotation.set(0, 0, s.yaw);
     }
   }
 
@@ -153,7 +133,6 @@ export class SampleLayer {
       const key = lookKey(s);
       const item = this.items.get(s.id);
       if (item && item.key === key) continue;
-      const attach = item?.attach ?? null;
       if (item) this.drop(s.id);
       const look = buildLook(s);
       const mesh = new THREE.Mesh(look.geometry, look.material);
@@ -162,7 +141,7 @@ export class SampleLayer {
       mesh.receiveShadow = true;
       mesh.userData.sampleId = s.id;
       this.group.add(mesh);
-      this.items.set(s.id, { mesh, key, ownsGeometry: look.ownsGeometry, placeholder: look.placeholder, attach });
+      this.items.set(s.id, { mesh, key, ownsGeometry: look.ownsGeometry, placeholder: look.placeholder });
     }
     for (const id of [...this.items.keys()]) if (!seen.has(id)) this.drop(id);
   }

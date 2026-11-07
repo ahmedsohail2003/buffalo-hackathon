@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import type { Sample } from '../contracts';
-import { getRuntime } from '../app/runtime';
+import { inContainment } from '../core';
 import { useSamples } from './hooks';
 import { useSlots, type MissionSlotName } from './slots';
 
@@ -19,11 +19,6 @@ function Slot({ name, title, chip, empty }: { name: MissionSlotName; title: stri
       <div className="slot-body">{Component ? <Component /> : <div className="empty-slot">{empty}</div>}</div>
     </div>
   );
-}
-
-function inContainment(s: Sample): boolean {
-  const c = getRuntime().core.layout.containment;
-  return Math.abs(s.pos[0] - c.x) <= c.innerW / 2 && Math.abs(s.pos[1] - c.y) <= c.innerD / 2;
 }
 
 function SampleRow({ s }: { s: Sample }) {
@@ -46,7 +41,7 @@ function SampleRow({ s }: { s: Sample }) {
         </div>
       </div>
       <div className="tags">
-        {s.held ? <span className="chip cyan">held</span> : inContainment(s) ? <span className="chip amber">contained</span> : null}
+        {s.held ? <span className="chip cyan">held</span> : inContainment(s.pos[0], s.pos[1]) ? <span className="chip amber">contained</span> : null}
         <span className="chip" title={`Created by ${s.createdBy}`}>
           {kind}
         </span>

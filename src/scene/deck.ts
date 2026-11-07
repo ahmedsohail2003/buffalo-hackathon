@@ -192,7 +192,7 @@ function makeLabelTexture(text: string, wPx: number, hPx: number): THREE.CanvasT
 
 /** Amber anodized containment bin with a dark floor and a 'SAMPLE CONTAINMENT' plate in front. */
 export function buildContainment(layout: BayLayout): THREE.Group {
-  const { x, y, innerW, innerD, wallH, wallT } = layout.containment;
+  const { x, y, innerW, innerD, wallH, wallT, floorZ } = layout.containment;
   const g = new THREE.Group();
   g.name = 'containment';
   const amber = new THREE.MeshStandardMaterial({ color: '#d98a12', roughness: 0.36, metalness: 0.55 });
@@ -209,8 +209,10 @@ export function buildContainment(layout: BayLayout): THREE.Group {
   wall(outerW, wallT, x, y + innerD / 2 + wallT / 2);
   wall(wallT, innerD, x - innerW / 2 - wallT / 2, y);
   wall(wallT, innerD, x + innerW / 2 + wallT / 2, y);
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(innerW, innerD, 0.002), new THREE.MeshStandardMaterial({ color: '#1c2129', roughness: 0.85, metalness: 0.2 }));
-  floor.position.set(x, y, 0.001);
+  // floor plate: its top is where released samples rest inside the bin
+  const floorT = Math.max(0.001, floorZ);
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(innerW, innerD, floorT), new THREE.MeshStandardMaterial({ color: '#1c2129', roughness: 0.85, metalness: 0.2 }));
+  floor.position.set(x, y, floorT / 2);
   floor.receiveShadow = true;
   g.add(floor);
 

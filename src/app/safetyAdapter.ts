@@ -14,12 +14,13 @@ export interface GestureCommand {
   dwellMs: number;
 }
 
+/** The fixed signal mapping (docs/ARCHITECTURE.md): keys 1-5 simulate holding each gesture. */
 export const GESTURE_COMMANDS: readonly GestureCommand[] = [
   { gesture: 'Open_Palm', signal: 'STOP', key: '1', gestureLabel: 'Open palm', commandLabel: 'Stop', dwellMs: 300 },
-  { gesture: 'Closed_Fist', signal: 'ESTOP', key: '2', gestureLabel: 'Fist, held', commandLabel: 'E-stop', dwellMs: 600 },
+  { gesture: 'Closed_Fist', signal: 'ESTOP', key: '2', gestureLabel: 'Fist, held 1.5 s', commandLabel: 'E-stop', dwellMs: 1500 },
   { gesture: 'Thumb_Up', signal: 'RESUME', key: '3', gestureLabel: 'Thumb up', commandLabel: 'Resume', dwellMs: 700 },
-  { gesture: 'Pointing_Up', signal: 'CYCLE_START', key: '4', gestureLabel: 'Point up', commandLabel: 'Cycle start', dwellMs: 700 },
-  { gesture: 'Victory', signal: 'SLOW', key: '5', gestureLabel: 'Victory', commandLabel: 'Slow', dwellMs: 700 },
+  { gesture: 'Pointing_Up', signal: 'SLOW', key: '4', gestureLabel: 'Point up', commandLabel: 'Slow', dwellMs: 700 },
+  { gesture: 'Victory', signal: 'CYCLE_START', key: '5', gestureLabel: 'Victory', commandLabel: 'Cycle start', dwellMs: 700 },
 ];
 
 export const MIN_GESTURE_SCORE = 0.55;

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BayState } from '../contracts';
-import { log } from '../app/bus';
 import { getRuntime } from '../app/runtime';
 import { BayScene, getBayView } from '../scene/BayScene';
 import { useBayState, useLastCaptureAt, useNow, useTelemetry } from './hooks';
@@ -71,9 +70,14 @@ function ResetPanel() {
             type="button"
             className="btn small"
             onClick={() => {
-              setArmedAt(Date.now());
-              setError(null);
-              log('safety', 'E-STOP reset: operator confirmed the bay is clear');
+              const r = getRuntime().resetEstop('arm');
+              if (r.ok) {
+                setArmedAt(Date.now());
+                setError(null);
+              } else {
+                setArmedAt(null);
+                setError(r.reason ?? 'Reset refused');
+              }
             }}
           >
             {armed ? 'Confirmed' : 'Bay is clear'}
@@ -90,7 +94,7 @@ function ResetPanel() {
             className="btn small danger"
             disabled={!armed}
             onClick={() => {
-              const r = getRuntime().resetEstop('panel');
+              const r = getRuntime().resetEstop('confirm');
               if (!r.ok) setError(r.reason ?? 'Reset refused');
               setArmedAt(null);
             }}
@@ -174,8 +178,8 @@ function Telemetry() {
         <span className="v num">{Math.round(t.jawOpen * 100)}%</span>
       </div>
       <div className="cell">
-        <span className="k">{t.mock ? 'Arm core' : 'View'}</span>
-        <span className="v num dim">{t.mock ? 'stand-in' : `${t.fps} fps`}</span>
+        <span className="k">View</span>
+        <span className="v num dim">{t.fps} fps</span>
       </div>
     </div>
   );

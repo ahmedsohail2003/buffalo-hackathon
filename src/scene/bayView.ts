@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { FrameCapture } from '../contracts';
-import type { ArmRigParts, BayCore } from '../app/bayTypes';
+import type { BayCore } from '../app/bayTypes';
 import type { SceneLink } from '../app/runtime';
 import { BAY_CAPTURE_SIZE, type BayCameraModel } from './bayCamera';
 import { buildContainment, buildDeck } from './deck';
@@ -16,7 +16,7 @@ const MARS_URL = `${import.meta.env.BASE_URL}assets/space/mars_1024.jpg`;
 const ESTOP_TINT = new THREE.Color('#ef4444');
 /** live preview refresh of the bay camera canvas, ms */
 const PREVIEW_MS = 500;
-const VIEW_HOME = { pos: new THREE.Vector3(-0.36, -0.88, 0.47), target: new THREE.Vector3(0.03, -0.1, 0.08) };
+const VIEW_HOME = { pos: new THREE.Vector3(-0.31, -0.64, 0.4), target: new THREE.Vector3(-0.005, -0.09, 0.07) };
 
 interface TintSlot {
   mat: THREE.MeshStandardMaterial;
@@ -34,8 +34,7 @@ export class BayView implements SceneLink {
   private controls: OrbitControls;
   private env: SpaceEnvironment;
   private samples: SampleLayer;
-  private rig: ArmRigParts;
-  private tcp = new THREE.Matrix4();
+  private tcpPos = new THREE.Vector3();
   private tcpMarker: THREE.Group;
   private plumb: THREE.Line;
   private tint: TintSlot[] = [];
@@ -57,14 +56,14 @@ export class BayView implements SceneLink {
     hemi.position.set(0, 0, 1);
     const key = new THREE.DirectionalLight('#ffffff', 2.3);
     key.position.set(-0.45, -0.75, 1.35);
-    key.target.position.set(0.02, -0.12, 0);
+    key.target.position.set(0, -0.08, 0);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
     const sc = key.shadow.camera;
-    sc.left = -0.6;
-    sc.right = 0.6;
-    sc.top = 0.6;
-    sc.bottom = -0.6;
+    sc.left = -0.5;
+    sc.right = 0.5;
+    sc.top = 0.5;
+    sc.bottom = -0.5;
     sc.near = 0.1;
     sc.far = 3.5;
     key.shadow.bias = -0.0004;
@@ -79,26 +78,27 @@ export class BayView implements SceneLink {
     this.root.add(buildContainment(core.layout));
     this.samples = new SampleLayer(core.samples);
     this.root.add(this.samples.group);
-    this.rig = core.rig.build();
-    for (const b of this.rig.bodies) {
-      b.object.traverse((o) => {
-        const mesh = o as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        const own = mats.map((m) => {
-          const c = m.clone();
-          if ((c as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
-            const sm = c as THREE.MeshStandardMaterial;
-            this.tint.push({ mat: sm, emissive: sm.emissive.clone(), intensity: sm.emissiveIntensity });
-          }
-          return c;
-        });
-        mesh.material = Array.isArray(mesh.material) ? own : own[0]!;
-      });
-      this.root.add(b.object);
-    }
+    // the SO-101: the core poses its render tree; this view owns its own copies of the materials
+    // so the E-STOP tint never leaks into anything else
+    const own = new Map<THREE.Material, THREE.Material>();
+    core.model.root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      const swap = (m: THREE.Material) => {
+        let c = own.get(m);
+        if (!c) {
+          c = m.clone();
+          own.set(m, c);
+          const sm = c as THREE.MeshStandardMaterial;
+          if (sm.isMeshStandardMaterial) this.tint.push({ mat: sm, emissive: sm.emissive.clone(), intensity: sm.emissiveIntensity });
+        }
+        return c;
+      };
+      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
+    });
+    this.root.add(core.model.root);
 
     // ---- viewer-only overlays: tool-centre marker and a plumb line to the deck
     this.tcpMarker = new THREE.Group();
@@ -140,8 +140,8 @@ export class BayView implements SceneLink {
     this.controls.enablePan = false;
     this.controls.rotateSpeed = 0.55;
     this.controls.zoomSpeed = 0.7;
-    this.controls.minDistance = 0.45;
-    this.controls.maxDistance = 2.2;
+    this.controls.minDistance = 0.3;
+    this.controls.maxDistance = 1.9;
     this.controls.minPolarAngle = 0.2;
     this.controls.maxPolarAngle = 1.36;
     this.controls.update();
@@ -199,8 +199,8 @@ export class BayView implements SceneLink {
 
   /** Pose the arm, samples and overlays from the core. */
   sync(now: number = performance.now()): void {
-    const snap = this.core.arm.snapshot();
-    this.rig.pose(snap, this.tcp);
+    const [tx, ty, tz] = this.core.model.tcp();
+    this.tcpPos.set(tx, ty, tz);
     const estop = this.core.gate.state() === 'ESTOPPED';
     if (estop !== this.tinted) {
       this.tinted = estop;
@@ -214,8 +214,8 @@ export class BayView implements SceneLink {
         }
       }
     }
-    this.samples.sync(this.tcp, now);
-    const p = new THREE.Vector3().setFromMatrixPosition(this.tcp);
+    this.samples.sync(now);
+    const p = this.tcpPos;
     this.tcpMarker.position.copy(p);
     this.plumb.position.copy(p);
     this.plumb.scale.set(1, 1, Math.max(0.001, p.z - 0.0005));

@@ -1159,3 +1159,40 @@ button {
     animation: none !important;
   }
 }
+
+/* ---- boot ----------------------------------------------------------------------------------- */
+
+.boot {
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(900px 500px at 50% 40%, rgba(56, 189, 248, 0.07), transparent 70%),
+    var(--bg);
+}
+.boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+.boot-name {
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: 0.3em;
+  color: var(--text);
+}
+.boot-card p {
+  margin: 0;
+}
+.boot-dots::after {
+  content: '…';
+  animation: boot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes boot-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
