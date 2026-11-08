@@ -1360,8 +1360,13 @@ button {
 .app.present .overlay-bl {
   display: none;
 }
+/* the tagline would truncate mid-word once the egress chip fills; the callsign stays */
 .app.present .brand-sub .tagline {
-  font-size: 13.5px;
+  display: none;
+}
+.app.present .badge-egress {
+  flex: none;
+  max-width: none;
 }
 .app.present .banner .state .v {
   font-size: 26px;

@@ -1,5 +1,6 @@
 import { APP_NAME, BAY_CALLSIGN, TAGLINE } from '../brand';
-import { egressSummary, formatBytes } from '../app/egress';
+import { egressShort, egressSummary, formatBytes } from '../app/egress';
+import { PARAMS } from '../app/params';
 import { useEgress, useInputMode, useNow } from './hooks';
 
 const START = Date.now();
@@ -52,7 +53,16 @@ export function TopBar() {
           SIMULATED ARM · NO PHYSICS
         </span>
         <span className="chip badge-egress" title={egressDetail} aria-label={`Leaving this machine: ${egressSummary(egress)}`}>
-          Leaving this machine: <b>{egressSummary(egress)}</b>
+          {PARAMS.present ? (
+            // projector mode: short enough that nothing clips at 1280 px; the tooltip has the detail
+            <>
+              Sent: <b>{egressShort(egress)}</b>
+            </>
+          ) : (
+            <>
+              Leaving this machine: <b>{egressSummary(egress)}</b>
+            </>
+          )}
         </span>
         <span className={`chip ${mode === 'camera' ? 'cyan' : ''}`} title={mode === 'camera' ? 'Hand tracked by the webcam, on this device' : 'Hand signals come from the keypad (keys 1-5)'}>
           <span className="dot" />
