@@ -9,6 +9,7 @@ import { SAMPLE_LIMITS } from './limits';
 import { PRESETS, matchPreset } from './presets';
 import { fabricatePreset, fabricateProgram, geometryForSample } from './fabricate';
 import type { FabPart, FabProgram } from './types';
+import { ANTENNA_BOOM_30CM, ASTEROID_3M, BLOCK_20CM } from './__fixtures__/designs';
 
 const prog = (parts: FabPart[] | Record<string, unknown>[], extra: Record<string, unknown> = {}): FabProgram =>
   sanitizeProgram({ name: 'test', category: 'other', color: '#888888', density_g_cm3: 2.7, parts, ...extra });
@@ -37,8 +38,12 @@ describe('sanitizeProgram (a program is a request, never trusted)', () => {
     expect(p.density_g_cm3).toBe(8);
     expect(p.parts.length).toBe(MAX_PARTS);
     const [box, rock, lathe, sphere] = p.parts;
+    // the 9999 mm side is the largest length: the whole design shrinks by 120/9999, so it lands on its clamp
+    expect(p.design_scale).toBeCloseTo(120 / 9999, 6);
     expect(box.size_mm).toEqual([120, 1, 20]);
-    expect(box.pos_mm).toEqual([80, -80, 0]);
+    expect(box.pos_mm![0]).toBeCloseTo(6, 2); // 500 mm, shrunk by the same factor
+    expect(box.pos_mm![1]).toBeCloseTo(-6, 2);
+    expect(box.pos_mm![2]).toBe(0);
     expect(box.rot_deg).toEqual([360, 0, 0]);
     expect(box.color).toBe('#ffffff');
     expect(box.metalness).toBe(1);
@@ -49,7 +54,8 @@ describe('sanitizeProgram (a program is a request, never trusted)', () => {
     expect(lathe.profile_mm!.every(([r]) => r <= 60)).toBe(true);
     const zs = lathe.profile_mm!.map(([, z]) => z);
     expect(zs).toEqual([...zs].sort((a, b) => a - b));
-    expect(sphere.radius_mm).toBe(5); // diameter accepted
+    expect(sphere.radius_mm).toBe(1); // its 5 mm radius shrank under the 1 mm minimum
+    expect(sanitizeProgram({ parts: [{ kind: 'sphere', diameter_mm: 10 }] }).parts[0].radius_mm).toBe(5); // diameter accepted
   });
 
   it('never throws on garbage: falls back to a single rock', () => {
@@ -66,6 +72,76 @@ describe('sanitizeProgram (a program is a request, never trusted)', () => {
     expect(p.density_g_cm3).toBe(7.8);
     expect(PROGRAM_JSON_SCHEMA.required).toContain('material');
     expect(JSON.stringify(PROGRAM_JSON_SCHEMA)).not.toContain('density_g_cm3');
+  });
+});
+
+describe('an oversize design shrinks whole before anything is clamped (design_scale)', () => {
+  it('a 3 m asteroid: the 1500 mm radius lands on its clamp and the factor is kept', () => {
+    const p = sanitizeProgram(ASTEROID_3M, { allowDensity: false });
+    expect(p.parts[0].radius_mm).toBe(120);
+    expect(p.design_scale).toBe(0.08);
+  });
+
+  it('a 30 cm antenna boom keeps its proportions: the end fitting and the ball still sit on top of the boom', () => {
+    const p = sanitizeProgram(ANTENNA_BOOM_30CM, { allowDensity: false });
+    const [flange, boom, fitting, ball] = p.parts;
+    const k = 80 / 300; // the ball at z 300 is furthest past its clamp (80 mm)
+    expect(p.design_scale).toBeCloseTo(k, 5);
+    expect(boom.height_mm).toBeCloseTo(284 * k, 2);
+    expect(boom.pos_mm![2]).toBeCloseTo(flange.height_mm!, 2);
+    expect(fitting.pos_mm![2]).toBeCloseTo(boom.pos_mm![2] + boom.height_mm!, 2);
+    expect(ball.pos_mm![2]).toBeCloseTo(fitting.pos_mm![2] + fitting.height_mm!, 2);
+    expect(boom.radius_mm! / flange.radius_mm!).toBeCloseTo(7.5 / 12, 2);
+  });
+
+  it('every length shrinks by the same factor; angles, stretch ratios and finishes do not', () => {
+    const p = sanitizeProgram({
+      name: 'kit', category: 'tool', color: '#888888',
+      parts: [
+        { kind: 'box', size_mm: [240, 20, 10], pos_mm: [40, -20, 6], rot_deg: [0, 0, 30], metalness: 0.5 },
+        { kind: 'cone', radius_mm: 30, radius2_mm: 10, height_mm: 40 },
+        { kind: 'torus', radius_mm: 30, radius2_mm: 8 },
+        { kind: 'lathe', profile_mm: [[10, 0], [12, 40]] },
+        { kind: 'extrude', outline_mm: [[-20, -10], [20, -10], [0, 20]], height_mm: 10 },
+        { kind: 'rock', radius_mm: 20, rock: { seed: 1, roughness: 0.5, craters: 2, elongation: [1.2, 1, 0.8] } },
+        { kind: 'cylinder', radius_mm: 4, height_mm: 8, repeat: { count: 3, step_mm: [16, 0, 0], step_deg: [0, 0, 45] } },
+        { kind: 'asset', asset: 'bennu', radius_mm: 30 },
+      ],
+    });
+    expect(p.design_scale).toBe(0.5); // 240 mm is twice the 120 mm clamp
+    const [box, cone, torus, lathe, extrude, rock, cyl, asset] = p.parts;
+    expect(box.size_mm).toEqual([120, 10, 5]);
+    expect(box.pos_mm).toEqual([20, -10, 3]);
+    expect(box.rot_deg).toEqual([0, 0, 30]);
+    expect(box.metalness).toBe(0.5);
+    expect([cone.radius_mm, cone.radius2_mm, cone.height_mm]).toEqual([15, 5, 20]);
+    expect([torus.radius_mm, torus.radius2_mm]).toEqual([15, 4]);
+    expect(lathe.profile_mm).toEqual([[5, 0], [6, 20]]);
+    expect(extrude.outline_mm).toEqual([[-10, -5], [10, -5], [0, 10]]);
+    expect(extrude.height_mm).toBe(5);
+    expect(rock.radius_mm).toBe(10);
+    expect(rock.rock!.elongation).toEqual([1.2, 1, 0.8]);
+    expect(cyl.repeat).toEqual({ count: 3, step_mm: [8, 0, 0], step_deg: [0, 0, 45] });
+    expect(asset.radius_mm).toBe(15);
+  });
+
+  it('a design that fits has no design_scale; a second pass keeps the first; the model cannot set it', () => {
+    expect(sanitizeProgram(PRESETS[0].program).design_scale).toBeUndefined();
+    const once = sanitizeProgram(ASTEROID_3M, { allowDensity: false });
+    expect(sanitizeProgram(once, { allowDensity: false })).toEqual(once); // fabricate and the scene sanitize again
+    const lie = { ...ASTEROID_3M, design_scale: 0.0001, parts: [{ kind: 'rock', radius_mm: 15 }] };
+    expect(sanitizeProgram(lie, { allowDensity: false, allowDesignScale: false }).design_scale).toBeUndefined();
+  });
+
+  it('fabricate reports against the real design: the "as designed" size and the overall scale', () => {
+    const f = fabricateProgram(sanitizeProgram(ASTEROID_3M, { allowDensity: false }), 'gemini');
+    expect(f.ok).toBe(true);
+    if (!f.ok) return;
+    expect(f.reasons[0]).toMatch(/^scaled to 1\.\d% /); // 8 % (design) x the guardrail's own ~17 %
+    expect(f.reasons).toContainEqual(expect.stringMatching(/^as designed it was 2\.\d m across, 2\.\d m tall and \d+ t$/));
+    expect(f.mesh.scale).toBeGreaterThan(0.1); // the guardrail's own scale: the scene rebuilds the stored program with it
+    const block = fabricateProgram(sanitizeProgram(BLOCK_20CM, { allowDensity: false }), 'gemini');
+    expect(block.ok && block.reasons.find((r) => r.startsWith('as designed'))).toBe('as designed it was 200 mm across, 200 mm tall and 22 kg');
   });
 });
 

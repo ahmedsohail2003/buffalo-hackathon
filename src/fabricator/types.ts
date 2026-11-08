@@ -56,4 +56,9 @@ export type FabProgram = {
   material?: SampleMaterial;
   /** effective density (g/cm^3) for parts without a material; presets may set it, Gemini may not */
   density_g_cm3: number;
+  /**
+   * Set by sanitizeProgram when it shrank an oversize design whole to fit its clamps: the program is this
+   * fraction (0-1) of the real design. Absent = as designed. Code sets it; Gemini may not.
+   */
+  design_scale?: number;
 };

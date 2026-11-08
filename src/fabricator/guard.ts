@@ -16,7 +16,21 @@ interface Bound {
 }
 
 const r0 = (v: number) => Math.round(v);
-const pct = (s: number) => `${Math.round(s * 100)}%`;
+/** Two significant digits under 100 (2.9, 17), whole numbers above. */
+const sig = (v: number) => (v >= 100 ? Math.round(v) : Number(v.toPrecision(2)));
+/** A scale as a percentage: whole from 10 %, two significant digits below (a 3 m asteroid comes out 1.3 %). */
+export const pct = (s: number) => `${s >= 0.1 ? Math.round(s * 100) : sig(s * 100)}%`;
+const length = (mm: number) => (mm < 1000 ? `${r0(mm)} mm` : `${sig(mm / 1000)} m`);
+const weight = (g: number) => (g < 1000 ? `${r0(g)} g` : g < 1e6 ? `${sig(g / 1000)} kg` : `${sig(g / 1e6)} t`);
+
+/**
+ * "48 mm across, 30 mm tall and 307 g": a design as measured, at its real size. designScale is the factor
+ * sanitizeProgram shrank an oversize design by before it was built (lengths divide by it, mass by its cube).
+ */
+export function designedSize(m: Measured, designScale = 1): string {
+  const k = designScale;
+  return `${length(m.graspWidthMm / k)} across, ${length((m.h * 1000) / k)} tall and ${weight(m.massG / k ** 3)}`;
+}
 
 /** Why each limit exists, as one sentence a voice can read. */
 export const WHY: Record<FitKey, string> = {
@@ -43,10 +57,17 @@ function windowFor(m: Measured, L: SampleLimits, hard: boolean): { hi: Bound; lo
   return { hi: ups.reduce((a, b) => (b.s < a.s ? b : a)), lo: los.reduce((a, b) => (b.s > a.s ? b : a)) };
 }
 
-/** The guardrail sentence for a sample measured after scaling. */
+/**
+ * The guardrail sentence for a sample measured after scaling. scale is the overall scale against the real
+ * design (the guardrail's own scale times any design_scale).
+ */
 export function fitSentence(scale: number, binding: FitKey | null, direction: 'down' | 'up' | 'none', after: Measured): string {
   const gw = r0(after.widthAlongXMm || after.graspWidthMm), h = r0(after.h * 1000), g = r0(after.massG), fp = r0(after.footprintMm);
-  if (direction === 'none' || !binding) return `fits as designed: ${gw} mm across the jaw, ${h} mm tall, ${g} g`;
+  if (direction === 'none' || !binding) {
+    return scale === 1
+      ? `fits as designed: ${gw} mm across the jaw, ${h} mm tall, ${g} g`
+      : `scaled to ${pct(scale)} to fit the fabricator's build volume: ${gw} mm across the jaw, ${h} mm tall, ${g} g`;
+  }
   if (direction === 'up') {
     return binding === 'height'
       ? `scaled up to ${pct(scale)} so the fingertips can reach it: ${h} mm tall, ${gw} mm across, ${g} g`
@@ -140,7 +161,7 @@ export function fitToGripper(m: Measured, limits: SampleLimits = SAMPLE_LIMITS, 
   };
   const reasons = [fitSentence(s, binding, direction, predicted)];
   if (binding) reasons.push(`why: ${WHY[binding]}`);
-  if (s !== 1) reasons.push(`as designed it was ${r0(m.graspWidthMm)} mm across, ${r0(m.h * 1000)} mm tall and ${r0(m.massG)} g`);
+  if (s !== 1) reasons.push(`as designed it was ${designedSize(m)}`);
   if (predicted.massG > limits.massWarnG) reasons.push(`heavy for this arm: ${r0(predicted.massG)} g is above the ${limits.massWarnG} g comfort level`);
   return { ok: true, scale: s, binding, direction, reasons };
 }

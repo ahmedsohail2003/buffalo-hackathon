@@ -55,7 +55,7 @@ export async function designProgram(description: string, deps: DesignerDeps, rep
     prompt += `\n\nYour previous design was: ${JSON.stringify(repair.program)}\nThe code guardrail rejected it: ${repair.reason}.${repair.suggestion ? ` Suggestion: ${repair.suggestion}` : ''}\nReturn a corrected shape program for the same object.`;
   }
   const r = await deps.generateJson({ system: DESIGNER_SYSTEM, prompt, schema: PROGRAM_JSON_SCHEMA, signal });
-  return { program: sanitizeProgram(parseModelJson(r.text), { allowDensity: false }), latencyMs: r.latencyMs };
+  return { program: sanitizeProgram(parseModelJson(r.text), { allowDensity: false, allowDesignScale: false }), latencyMs: r.latencyMs };
 }
 
 /** Refusals that are about the spot or the bay, not the design: no repair turn for those. */

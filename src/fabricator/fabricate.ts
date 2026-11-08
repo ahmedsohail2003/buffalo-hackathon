@@ -6,7 +6,7 @@ import type { BufferGeometry } from 'three';
 import type { BayApi, MeshInfo, Placement, Rejection, Sample, ShapeProgram } from '../contracts';
 import { buildShape, hasAsset, orientGeometry } from './build';
 import { ensureAssets } from './assets';
-import { fitSentence, fitToGripper, WHY, type FitKey } from './guard';
+import { designedSize, fitSentence, fitToGripper, WHY, type FitKey } from './guard';
 import { SAMPLE_LIMITS } from './limits';
 import { measureGeometry, type Measured } from './measure';
 import { PRESETS } from './presets';
@@ -127,10 +127,12 @@ export function fabricateProgram(rawProgram: unknown, source: MeshInfo['source']
     ...(asset ? { assetId: asset } : {}),
   };
   remember(meshKey(mesh.program, scale), geometry);
-  const sentence = fitSentence(scale, fit.binding, fit.direction, measured);
+  // sanitizeProgram may have shrunk an oversize design whole first (design_scale): report against the real design
+  const overall = scale * (program.design_scale ?? 1);
+  const sentence = fitSentence(overall, fit.binding, fit.direction, measured);
   const reasons = [sentence];
   if (fit.binding) reasons.push(`why: ${WHY[fit.binding]}`);
-  if (scale !== 1) reasons.push(`as designed it was ${r0(designed.graspWidthMm)} mm across, ${r0(designed.h * 1000)} mm tall and ${r0(designed.massG)} g`);
+  if (overall !== 1) reasons.push(`as designed it was ${designedSize(designed, program.design_scale)}`);
   if (measured.massG > L.massWarnG) reasons.push(`heavy for this arm: ${r0(measured.massG)} g is above the ${L.massWarnG} g comfort level`);
   const say = `Fabricated ${article(program.name)} ${program.name}: ${r0(mesh.graspWidthMm)} mm across, ${r0(mesh.heightMm)} mm tall, ${r0(mesh.massG)} grams.` +
     (scale !== 1 ? ` I ${sentence.replace(/:.*$/, '').replace(/^scaled (up )?to /, 'scaled it $1to ')}.` : '');

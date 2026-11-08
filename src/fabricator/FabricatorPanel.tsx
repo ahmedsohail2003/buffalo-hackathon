@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import type { BayApi, MeshInfo, Rejection } from '../contracts';
 import { designAndFabricate, type Designed, type GenerateJson } from './designer';
 import { fabricatePreset, type FabRejection, type Placed } from './fabricate';
+import { pct } from './guard';
 import { PRESETS, matchPreset } from './presets';
 import './fabricator.css';
 
@@ -15,7 +16,7 @@ interface Props {
   log?: (text: string, kind?: string) => void;
 }
 
-type Card = (Placed & { source?: MeshInfo['source']; latencyMs?: number; attempts?: number }) | (Rejection & { title?: string; note?: string });
+export type Card = (Placed & { source?: MeshInfo['source']; latencyMs?: number; attempts?: number }) | (Rejection & { title?: string; note?: string });
 
 const SOURCE_LABEL: Record<MeshInfo['source'], string> = { preset: 'preset', gemini: 'Gemini design', nasa: 'NASA shape model' };
 
@@ -106,7 +107,7 @@ export function FabricatorPanel({ bay, generateJson, log }: Props) {
   );
 }
 
-function ResultCard({ card, busy, onPick, pickNote }: { card: Card; busy: boolean; onPick: (id: string) => void; pickNote: string | null }) {
+export function ResultCard({ card, busy, onPick, pickNote }: { card: Card; busy: boolean; onPick: (id: string) => void; pickNote: string | null }) {
   if (!card.ok) {
     return (
       <div className="fab-card fail" aria-label="Fabricator result" role="status">
@@ -118,6 +119,7 @@ function ResultCard({ card, busy, onPick, pickNote }: { card: Card; busy: boolea
     );
   }
   const m = card.sample.mesh!;
+  const overall = m.scale * (card.fab.program.design_scale ?? 1); // against the real design size
   return (
     <div className="fab-card ok" aria-label="Fabricator result" role="status">
       <div className="fab-card-head">
@@ -129,7 +131,7 @@ function ResultCard({ card, busy, onPick, pickNote }: { card: Card; busy: boolea
         <span><b>{m.graspWidthMm.toFixed(0)}</b> mm across the jaw</span>
         <span><b>{m.heightMm.toFixed(0)}</b> mm tall</span>
         <span><b>{m.massG.toFixed(0)}</b> g</span>
-        <span className={m.scale === 1 ? '' : 'scaled'}>scale <b>{Math.round(m.scale * 100)}%</b></span>
+        <span className={overall === 1 ? '' : 'scaled'}>scale <b>{pct(overall)}</b></span>
       </div>
       <ul className="fab-reasons">
         {card.reasons.map((r, i) => <li key={i} className={i === 0 ? 'lead' : ''}>{i === 0 ? '✓ ' : ''}{r}</li>)}

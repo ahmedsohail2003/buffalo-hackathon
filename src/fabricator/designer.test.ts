@@ -37,6 +37,9 @@ describe('designer (Gemini proposes, code decides)', () => {
     expect(r.latencyMs).toBe(1200);
     expect(DESIGNER_SYSTEM).toContain('45 mm');
     expect(DESIGNER_SYSTEM).not.toMatch(/gemini-|flash/i);
+    // code owns the design scale too: a model that sends one is ignored
+    const lie = fake({ ...BENNU, design_scale: 0.001 });
+    expect((await designProgram('a Bennu fragment', { generateJson: lie.gen })).program.design_scale).toBeUndefined();
   });
 
   it('designAndFabricate places a good design as a gemini sample with a speakable sentence', async () => {

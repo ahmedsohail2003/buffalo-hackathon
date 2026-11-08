@@ -114,9 +114,11 @@ export function cleanColor(v: unknown): string | null {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+/** A number, or a numeric string, else NaN. */
+const toNum = (v: unknown): number => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
 /** Finite number clamped into [lo, hi], else the default. */
 function num(v: unknown, lo: number, hi: number, dflt: number): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  const n = toNum(v);
   return Number.isFinite(n) ? clamp(n, lo, hi) : dflt;
 }
 function optNum(v: unknown, lo: number, hi: number): number | undefined {
@@ -127,17 +129,41 @@ function tri(v: unknown, lo: number, hi: number, dflt: [number, number, number])
   if (!Array.isArray(v)) return [...dflt];
   return [num(v[0], lo, hi, dflt[0]), num(v[1], lo, hi, dflt[1]), num(v[2], lo, hi, dflt[2])];
 }
+
+/**
+ * The lengths (mm) of one sanitize pass: each is multiplied by k, then clamped. `over` records how far the
+ * largest one went past its clamp (1 = none did), so a pass at k = 1 finds the factor that fits them all.
+ */
+class Lengths {
+  over = 1;
+  constructor(readonly k: number) {}
+  num(v: unknown, lo: number, hi: number, dflt: number): number {
+    const n = toNum(v);
+    if (n > hi) this.over = Math.max(this.over, n / hi);
+    else if (lo < 0 && n < lo) this.over = Math.max(this.over, n / lo);
+    // scaled lengths are kept to a micrometre, so the largest one lands exactly on its clamp
+    return num(this.k === 1 ? n : Math.round(n * this.k * 1000) / 1000, lo, hi, dflt);
+  }
+  opt(v: unknown, lo: number, hi: number): number | undefined {
+    const n = this.num(v, lo, hi, NaN);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  tri(v: unknown, lo: number, hi: number, dflt: [number, number, number]): [number, number, number] {
+    if (!Array.isArray(v)) return [...dflt];
+    return [this.num(v[0], lo, hi, dflt[0]), this.num(v[1], lo, hi, dflt[1]), this.num(v[2], lo, hi, dflt[2])];
+  }
+}
 function material(v: unknown): SampleMaterial | undefined {
   return typeof v === 'string' && v in MATERIAL_DENSITY ? (v as SampleMaterial) : undefined;
 }
 const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 
 /** Lathe profile: <= 24 points, r 0-60 mm, z strictly ascending (sorted, 0.1 mm apart). */
-function cleanProfile(v: unknown): [number, number][] | null {
+function cleanProfile(v: unknown, mm: Lengths): [number, number][] | null {
   if (!Array.isArray(v)) return null;
   const pts = v
     .filter((p): p is unknown[] => Array.isArray(p) && p.length >= 2)
-    .map((p) => [num(p[0], 0, 60, NaN), num(p[1], -80, 120, NaN)] as [number, number])
+    .map((p) => [mm.num(p[0], 0, 60, NaN), mm.num(p[1], -80, 120, NaN)] as [number, number])
     .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
     .slice(0, 24)
     .sort((a, b) => a[1] - b[1]);
@@ -146,11 +172,11 @@ function cleanProfile(v: unknown): [number, number][] | null {
 }
 
 /** Extrude outline: 3-24 points within +/-60 mm with a non-zero area. */
-function cleanOutline(v: unknown): [number, number][] | null {
+function cleanOutline(v: unknown, mm: Lengths): [number, number][] | null {
   if (!Array.isArray(v)) return null;
   const pts = v
     .filter((p): p is unknown[] => Array.isArray(p) && p.length >= 2)
-    .map((p) => [num(p[0], -60, 60, NaN), num(p[1], -60, 60, NaN)] as [number, number])
+    .map((p) => [mm.num(p[0], -60, 60, NaN), mm.num(p[1], -60, 60, NaN)] as [number, number])
     .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
     .slice(0, 24);
   if (pts.length < 3) return null;
@@ -170,8 +196,8 @@ function hashString(s: string): number {
   return (h >>> 0) % 100000;
 }
 
-/** Sanitize one part; null drops it (unknown prim, unusable profile/outline/asset). */
-function cleanPart(raw: unknown, index: number, programColor: string, nameSeed: number): FabPart | null {
+/** Sanitize one part; null drops it (unknown prim, unusable profile/outline/asset). Lengths go through mm. */
+function cleanPart(raw: unknown, index: number, programColor: string, nameSeed: number, mm: Lengths): FabPart | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = { ...(raw as Record<string, unknown>) }; // never mutate the caller's object
   const kind = typeof r.kind === 'string' ? r.kind.toLowerCase() : typeof r.prim === 'string' ? r.prim.toLowerCase() : '';
@@ -179,10 +205,10 @@ function cleanPart(raw: unknown, index: number, programColor: string, nameSeed: 
   const p: FabPart = { kind: kind as FabPart['kind'] };
   // accept a diameter where a radius is expected (designers often think in diameters)
   if (r.radius_mm == null && r.diameter_mm != null) r.radius_mm = Number(r.diameter_mm) / 2;
-  const size = (v: unknown, d: number) => num(v, 1, 120, d);
+  const size = (v: unknown, d: number) => mm.num(v, 1, 120, d);
   switch (p.kind) {
     case 'box':
-      p.size_mm = tri(r.size_mm, 1, 120, [20, 20, 20]);
+      p.size_mm = mm.tri(r.size_mm, 1, 120, [20, 20, 20]);
       break;
     case 'sphere':
       p.radius_mm = size(r.radius_mm, 15);
@@ -193,12 +219,12 @@ function cleanPart(raw: unknown, index: number, programColor: string, nameSeed: 
       break;
     case 'cone':
       p.radius_mm = size(r.radius_mm, 15);
-      p.radius2_mm = num(r.radius2_mm, 0, 120, 0);
+      p.radius2_mm = mm.num(r.radius2_mm, 0, 120, 0);
       p.height_mm = size(r.height_mm, 30);
       break;
     case 'torus':
       p.radius_mm = size(r.radius_mm, 15);
-      p.radius2_mm = num(r.radius2_mm, 1, 60, Math.max(1, (p.radius_mm ?? 15) / 4));
+      p.radius2_mm = mm.num(r.radius2_mm, 1, 60, Math.max(1, (p.radius_mm ?? 15) / 4));
       break;
     case 'capsule':
       p.radius_mm = size(r.radius_mm, 10);
@@ -218,13 +244,13 @@ function cleanPart(raw: unknown, index: number, programColor: string, nameSeed: 
       break;
     }
     case 'lathe': {
-      const prof = cleanProfile(r.profile_mm);
+      const prof = cleanProfile(r.profile_mm, mm);
       if (!prof) return null;
       p.profile_mm = prof;
       break;
     }
     case 'extrude': {
-      const out = cleanOutline(r.outline_mm);
+      const out = cleanOutline(r.outline_mm, mm);
       if (!out) return null;
       p.outline_mm = out;
       p.height_mm = size(r.height_mm, 10);
@@ -234,7 +260,7 @@ function cleanPart(raw: unknown, index: number, programColor: string, nameSeed: 
       const id = typeof r.asset === 'string' ? r.asset.toLowerCase() : '';
       if (!(KNOWN_ASSETS as readonly string[]).includes(id)) return null;
       p.asset = id;
-      const ar = optNum(r.radius_mm, 1, 120);
+      const ar = mm.opt(r.radius_mm, 1, 120);
       if (ar !== undefined) p.radius_mm = ar; // absent = the model's own size
       break;
     }
@@ -242,9 +268,9 @@ function cleanPart(raw: unknown, index: number, programColor: string, nameSeed: 
   if (r.repeat && typeof r.repeat === 'object') {
     const rp = r.repeat as Record<string, unknown>;
     const count = Math.round(num(rp.count, 1, 12, 1));
-    if (count > 1) p.repeat = { count, step_mm: tri(rp.step_mm, -40, 40, [0, 0, 0]), step_deg: tri(rp.step_deg, -360, 360, [0, 0, 0]) };
+    if (count > 1) p.repeat = { count, step_mm: mm.tri(rp.step_mm, -40, 40, [0, 0, 0]), step_deg: tri(rp.step_deg, -360, 360, [0, 0, 0]) };
   }
-  p.pos_mm = tri(r.pos_mm ?? r.position_mm, -80, 80, [0, 0, 0]);
+  p.pos_mm = mm.tri(r.pos_mm ?? r.position_mm, -80, 80, [0, 0, 0]);
   p.rot_deg = tri(r.rot_deg ?? r.rotation_deg, -360, 360, [0, 0, 0]);
   p.color = cleanColor(r.color) ?? programColor;
   const m = material(r.material);
@@ -273,9 +299,15 @@ export function fallbackProgram(name = 'sample'): FabProgram {
 export interface SanitizeOptions {
   /** Accept a raw density_g_cm3 number (presets). Gemini programs pass false: code owns densities via materials. */
   allowDensity?: boolean;
+  /** Keep the design_scale of an earlier sanitize pass. The designer passes false: the model never sets it. */
+  allowDesignScale?: boolean;
 }
 
-/** Turn anything into a bounded FabProgram. Never throws; junk becomes a single rock. */
+/**
+ * Turn anything into a bounded FabProgram. Never throws; junk becomes a single rock. A design too big for the
+ * clamps (a 3 m asteroid, a 30 cm boom) first shrinks whole, every length by the same factor, so its proportions
+ * survive; the factor is kept as design_scale so the card can report against the real design size.
+ */
 export function sanitizeProgram(raw: unknown, opts: SanitizeOptions = {}): FabProgram {
   try {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fallbackProgram();
@@ -288,13 +320,19 @@ export function sanitizeProgram(raw: unknown, opts: SanitizeOptions = {}): FabPr
     const rawDensity = allowDensity ? optNum(r.density_g_cm3, 0.3, 8) : undefined;
     const density = rawDensity ?? (mat ? MATERIAL_DENSITY[mat] : MATERIAL_DENSITY.chondrite);
     const seed = hashString(name);
-    const parts = (Array.isArray(r.parts) ? r.parts : [])
-      .slice(0, MAX_PARTS * 2)
-      .map((p, i) => cleanPart(p, i, color, seed))
+    const rawParts = (Array.isArray(r.parts) ? r.parts : []).slice(0, MAX_PARTS * 2);
+    const probe = new Lengths(1); // finds how far the largest length is past its clamp
+    rawParts.forEach((p, i) => cleanPart(p, i, color, seed, probe));
+    const mm = new Lengths(1 / probe.over);
+    const parts = rawParts
+      .map((p, i) => cleanPart(p, i, color, seed, mm))
       .filter((p): p is FabPart => !!p)
       .slice(0, MAX_PARTS);
     if (!parts.length) return { ...fallbackProgram(name), color, parts: fallbackProgram(name).parts.map((p) => ({ ...p, color })) };
     const out: FabProgram = { name, category, color, parts, density_g_cm3: Math.round(density * 1000) / 1000 };
+    const earlier = (opts.allowDesignScale ?? true) ? optNum(r.design_scale, 1e-6, 1) ?? 1 : 1;
+    const designScale = earlier * mm.k;
+    if (designScale < 1) out.design_scale = Number(designScale.toPrecision(6));
     if (mat) out.material = mat;
     const desc = str(r.description, 200);
     if (desc) out.description = desc;
