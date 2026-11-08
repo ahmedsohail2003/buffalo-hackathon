@@ -104,6 +104,13 @@ describe('coworker loop', () => {
     expect(cw.busy).toBe(false);
   });
 
+  it('while IDLE, the prompt has CAPCOM ask for the cycle start and the request again, never promise a later action', () => {
+    const rule3 = COWORKER_PROMPT.split('\n').find((l) => l.startsWith('3. '));
+    expect(rule3).toContain('tell them to give the cycle start (Victory sign or CYCLE START), then send the request again');
+    expect(rule3).toContain('Never promise to act later.');
+    expect(COWORKER_PROMPT).not.toMatch(/until the bay is RUNNING/);
+  });
+
   it('reports a Gemini failure plainly', async () => {
     const bay = makeFakeBay({ samples: [bennu] });
     const call: CallFn = async () => {

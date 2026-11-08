@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { GeminiCallEntry } from '../contracts';
 import type { SpeakerLike } from '../voice/elevenSpeaker';
 import { makeFakeBay, makeSample } from './__fixtures__/fakeBay';
-import { LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
+import { LIVE_PROMPT, LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
 import type { ToolContext } from './tools';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -72,6 +72,13 @@ describe('Live config', () => {
     expect(decls).toHaveLength(9);
     expect(decls.find((d) => d.name === 'design_sample')?.behavior).toBe('NON_BLOCKING');
     expect(JSON.stringify(cfg.systemInstruction)).toContain('[BAY EVENT]');
+  });
+
+  it('while IDLE, CAPCOM asks for the cycle start and the request again, and never promises a later action', () => {
+    const line = LIVE_PROMPT.split('\n').find((l) => l.includes('While it is IDLE'));
+    expect(line).toContain('tell the operator to give the cycle start (Victory sign or CYCLE START), then repeat the request');
+    expect(line).toContain('Never promise to act later');
+    expect(LIVE_PROMPT).not.toContain('wait for a [BAY EVENT] saying the bay is RUNNING');
   });
 
   it('asks the server for a token locked to the config', async () => {

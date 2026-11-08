@@ -23,7 +23,7 @@ export const LIVE_PROMPT = [
   'Moving tools answer "started" at once. Never say a move or a new sample worked until its result arrives in a message that begins with [BAY EVENT]; then report it in a few words.',
   '[BAY EVENT] messages are bay telemetry, not the operator speaking. Report them briefly and do not repeat old ones.',
   'You cannot stop, resume, slow or reset the bay. The operator owns safety: an open palm stops the arm and a held fist is an emergency stop. If the bay is stopped, say so and wait.',
-  'You cannot start the bay either. While it is IDLE, moving tools are refused: ask the operator to start the cycle (Victory sign or CYCLE START) and wait for a [BAY EVENT] saying the bay is RUNNING. Never retry a move because the bay changed state.',
+  'You cannot start the bay either. While it is IDLE, moving tools are refused: tell the operator to give the cycle start (Victory sign or CYCLE START), then repeat the request. Never promise to act later, and never retry a move because the bay changed state.',
   'Use sample ids from describe_bay. If a request is ambiguous, ask one short question.',
   'After a pick or a place you may use check_bay once to confirm on camera. If the camera and the registry disagree, trust the registry.',
 ].join('\n');

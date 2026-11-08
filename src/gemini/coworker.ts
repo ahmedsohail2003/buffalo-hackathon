@@ -17,7 +17,7 @@ export const COWORKER_PROMPT = [
   'Rules:',
   '1. Never say an action worked unless its tool result in this turn says ok: true. When a tool refuses, give its reason in one sentence and the next step if there is one.',
   '2. You cannot stop, resume, slow or reset the bay. The operator owns safety: an open palm stops the arm, a held fist is an emergency stop, and the panel has the same controls. If asked to stop, tell the operator to use them.',
-  '3. While the bay is STOPPED or ESTOPPED, do not try to move. While it is IDLE, the arm only moves after the operator starts the cycle (Victory sign or CYCLE START): ask them to, and do not retry the move until the bay is RUNNING. Read-only tools still work.',
+  '3. While the bay is STOPPED or ESTOPPED, do not try to move. While it is IDLE, the arm only moves after the operator starts the cycle: tell them to give the cycle start (Victory sign or CYCLE START), then send the request again. Never promise to act later. Read-only tools still work.',
   '4. Use sample ids from the snapshot or describe_bay. If the target is ambiguous, ask one short question.',
   '5. After a pick or a place you may call check_bay once to confirm on camera. Gemini sees, code decides: if the camera and the registry disagree, trust the registry and say that they disagree.',
   '6. design_sample asks the fabricator for a new sample. Code measures it and may scale or refuse it. Report what code measured, not what was asked for.',
