@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { BayApi, ErPointEvent, Vec3 } from '../contracts';
+import type { BayApi, ErCheckEvent, ErPointEvent, Vec3 } from '../contracts';
 import { BAY_CAMERA } from '../core/constants';
 import { BayCameraModel } from '../scene/bayCamera';
 import { fakeProject, makeFakeBay, makeSample } from './__fixtures__/fakeBay';
 import type { CallFn, CallResult } from './client';
 import { Coworker } from './coworker';
-import { pointEvent } from './erEvents';
+import { checkEvent, pointEvent } from './erEvents';
 import { dispatchTool } from './tools';
 import type { LogSink } from './types';
 
@@ -14,8 +14,9 @@ const cube = makeSample({ id: 'sample_1', name: 'sample cube', dims: { w: 0.024,
 
 function sinkWithEvents() {
   const events: ErPointEvent[] = [];
-  const sink: LogSink = { log() {}, ledger() {}, er: (ev) => events.push(ev) };
-  return { sink, events };
+  const checks: ErCheckEvent[] = [];
+  const sink: LogSink = { log() {}, ledger() {}, er: (ev) => (ev.kind === 'point' ? events.push(ev) : checks.push(ev)) };
+  return { sink, events, checks };
 }
 
 /** A model reply pointing at a bay-frame point (the fake camera is linear, so this is exact). */
@@ -147,5 +148,60 @@ describe('er:point projection maths on the real bay camera', () => {
     const p = cam.project([0.01, -0.1, 0.015]);
     expect(ev.truth_yx![0]).toBeCloseTo(p[0], 1);
     expect(pointEvent(bay, { label: 'x', points: [] }, 'live')).toBeNull();
+  });
+});
+
+describe('er:check event: one per check_bay answer', () => {
+  const inBin = makeSample({ id: 'sample_2', name: 'Bennu (NASA shape model)', kind: 'mesh', dims: { w: 0.03, d: 0.03, h: 0.031 }, pos: [-0.127, -0.127, 0.0185] });
+  const reply =
+    (answer: string, observation: string): CallFn =>
+    async () => ({ text: JSON.stringify({ answer, observation }) }) as CallResult;
+
+  it('carries the decision, who decided and what the camera said', async () => {
+    const bay = makeFakeBay({ samples: [cube, inBin] });
+    const { sink, events, checks } = sinkWithEvents();
+    const inContainment = (s: { id: string }) => s.id === 'sample_2';
+    const r = await dispatchTool(bay, 'check_bay', { question: '  Is Bennu in the containment bin? ' }, 'coworker', {
+      sink,
+      call: reply('unsure', 'The gripper hides part of the bin.'),
+      inContainment,
+    });
+    expect(r).toMatchObject({ ok: true, decided_by: 'code', answer: 'unsure' });
+    expect(events).toHaveLength(0);
+    expect(checks).toHaveLength(1);
+    expect(checks[0]).toMatchObject({
+      kind: 'check',
+      source: 'coworker',
+      question: 'Is Bennu in the containment bin?',
+      decision: true,
+      decided_by: 'registry',
+      camera: 'unsure',
+      agree: null,
+      observation: 'The gripper hides part of the bin.',
+      sample_id: 'sample_2',
+      sample_name: 'Bennu (NASA shape model)',
+    });
+
+    // the camera disagrees with the registry
+    await dispatchTool(bay, 'check_bay', { question: 'Is Bennu in the containment bin?' }, 'live', { sink, call: reply('no', 'The bin looks empty.'), inContainment });
+    expect(checks[1]).toMatchObject({ source: 'live', decision: true, decided_by: 'registry', camera: 'no', agree: false });
+
+    // a question code cannot answer: the camera decides, and there is no single sample
+    await dispatchTool(bay, 'check_bay', { question: 'Is the deck clear of debris?' }, 'live', { sink, call: reply('yes', 'Only three samples.'), inContainment });
+    expect(checks[2]).toMatchObject({ decision: true, decided_by: 'camera', camera: 'yes', agree: null, sample_id: null, sample_name: null });
+  });
+
+  it('is not sent for refusals or a failed camera call', async () => {
+    const bay = makeFakeBay({ samples: [cube, inBin] });
+    const { sink, checks } = sinkWithEvents();
+    const down: CallFn = async () => {
+      throw new Error('network down');
+    };
+    expect(await dispatchTool(bay, 'check_bay', { question: 'Is Bennu in the bin?' }, 'live', { sink, call: down })).toMatchObject({ code: 'TOOL_ERROR' });
+    expect(await dispatchTool(bay, 'check_bay', {}, 'live', { sink, call: down })).toMatchObject({ code: 'BAD_ARGS' });
+    expect(await dispatchTool(bay, 'check_bay', { question: 'Is it in the bin?', sample_id: 'sample_9' }, 'live', { sink, call: down })).toMatchObject({ code: 'NO_SAMPLE' });
+    expect(checks).toHaveLength(0);
+    expect(checkEvent('q', { ok: false, code: 'TOOL_ERROR', reason: 'x' }, 'live')).toBeNull();
+    expect(checkEvent('q', { ok: true, answer: 'maybe', decided_by: 'camera' }, 'live')).toBeNull();
   });
 });

@@ -242,3 +242,25 @@ export interface ErPointEvent {
   truth_mm: Vec3 | null;
   truth_yx: [number, number] | null;
 }
+
+/** A check_bay result for the viewer overlays (bus event 'er:check'): the decision, who made it, what the camera said. */
+export interface ErCheckEvent {
+  kind: 'check';
+  /** Date.now() ms */
+  t: number;
+  source: string;
+  question: string;
+  /** the decision (the tool's ok) */
+  decision: boolean;
+  /** 'registry' when code could answer the question itself (then it decides), else 'camera' */
+  decided_by: 'registry' | 'camera';
+  /** what the camera answered */
+  camera: 'yes' | 'no' | 'unsure';
+  /** whether the camera agrees with the registry; null when only the camera could answer */
+  agree: boolean | null;
+  /** the camera's one-sentence observation */
+  observation: string;
+  /** the one sample the question is about, or null */
+  sample_id: string | null;
+  sample_name: string | null;
+}

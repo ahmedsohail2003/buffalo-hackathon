@@ -1,7 +1,8 @@
 // How the camera results read and where they draw: the point_at caption (who pointed, at which
-// sample, the miss in mm) and the mapping from bay-camera image points to the inset. Shared by the
-// Bay pane and the deck marker. Pure.
-import type { ErPointEvent } from '../contracts';
+// sample, the miss in mm), the check_bay badge ("Bennu in bin: YES (registry) · camera: yes") and
+// the mapping from bay-camera image points to the inset. Shared by the Bay pane and the deck
+// marker. Pure.
+import type { ErCheckEvent, ErPointEvent } from '../contracts';
 
 /** How long a camera result stays on screen, ms; it fades out over the last ER_FADE_MS. */
 export const ER_OVERLAY_MS = 6000;
@@ -62,4 +63,51 @@ export function insetPoint(yx: readonly [number, number]): { x: number; y: numbe
   const [y, x] = yx;
   const c = (v: number) => Math.min(1000, Math.max(0, v));
   return { x: c(x), y: c(y), inside: x >= 0 && x <= 1000 && y >= 0 && y <= 1000 };
+}
+
+export interface CheckBadge {
+  /** "Bennu in bin", or the question in short ("Deck clear of debris") */
+  subject: string;
+  verdict: 'YES' | 'NO' | 'UNSURE';
+  /** who decided */
+  by: 'registry' | 'camera';
+  /** who decided, as the badge's second line starts: "by registry" or "decided by the camera" */
+  byText: string;
+  /** "camera: yes" when the registry decided (what the camera said), else null */
+  camera: string | null;
+  /** the camera answered and disagrees with the registry */
+  disagree: boolean;
+  /** the badge on one line */
+  text: string;
+}
+
+const AUX = /^(is|are|does|do|did|can|could|has|have|was|were|will|would|should)\s+/i;
+
+/** "Is the deck clear of debris?" -> "Deck clear of debris" */
+export function questionSubject(question: string): string {
+  const s = question
+    .trim()
+    .replace(/[?.!\s]+$/, '')
+    .replace(AUX, '')
+    .replace(/^(the|a|an)\s+/i, '')
+    .trim();
+  return clip(s ? s[0].toUpperCase() + s.slice(1) : 'Camera check', 28);
+}
+
+export function checkBadge(ev: ErCheckEvent): CheckBadge {
+  const byRegistry = ev.decided_by === 'registry';
+  const verdict: CheckBadge['verdict'] = byRegistry ? (ev.decision ? 'YES' : 'NO') : ev.camera === 'yes' ? 'YES' : ev.camera === 'no' ? 'NO' : 'UNSURE';
+  // the registry only decides the plain "is <one sample> in the bin?" question
+  const subject = byRegistry && ev.sample_name ? `${clip(shortName(ev.sample_name), 18)} in bin` : questionSubject(ev.question);
+  const camera = byRegistry ? `camera: ${ev.camera}` : null;
+  const disagree = byRegistry && ev.agree === false;
+  return {
+    subject,
+    verdict,
+    by: byRegistry ? 'registry' : 'camera',
+    byText: byRegistry ? 'by registry' : 'decided by the camera',
+    camera,
+    disagree,
+    text: `${subject}: ${verdict} (${byRegistry ? 'registry' : 'camera'})${camera ? ` · ${camera}` : ''}`,
+  };
 }

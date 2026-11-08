@@ -1,6 +1,7 @@
-// point_at results as viewer events (bus 'er:point'): what the bay-camera inset and the deck
-// marker draw. The dispatcher hands one event per result to the sink's er hook. Pure; no DOM.
-import type { BayApi, ErPointEvent, Vec3 } from '../contracts';
+// point_at and check_bay results as viewer events (bus 'er:point' and 'er:check'): what the
+// bay-camera inset and the deck marker draw. The dispatcher hands one event per result to the
+// sink's er hook. Pure; no DOM.
+import type { BayApi, ErCheckEvent, ErPointEvent, Vec3 } from '../contracts';
 
 type Loose = Record<string, unknown>;
 
@@ -56,8 +57,33 @@ export function pointEvent(bay: BayApi, r: Loose, source: string, t: number = Da
   };
 }
 
-/** The overlay event for one tool result: point_at only, and only when the camera answered. */
-export function erEvent(bay: BayApi, name: string, _args: Loose, r: Loose, source: string, t: number = Date.now()): ErPointEvent | null {
+const ANSWERS: ReadonlySet<string> = new Set(['yes', 'no', 'unsure']);
+
+/** The event for a check_bay result, or null when the camera gave no answer (a refusal or an error). */
+export function checkEvent(question: string, r: Loose, source: string, t: number = Date.now()): ErCheckEvent | null {
+  const answer = text(r.answer);
+  if (!answer || !ANSWERS.has(answer)) return null;
+  if (r.decided_by !== 'code' && r.decided_by !== 'camera') return null;
+  const registry = Array.isArray(r.registry) ? r.registry : [];
+  const one = registry.length === 1 ? obj(registry[0]) : null;
+  return {
+    kind: 'check',
+    t,
+    source,
+    question,
+    decision: r.ok === true,
+    decided_by: r.decided_by === 'code' ? 'registry' : 'camera',
+    camera: answer as ErCheckEvent['camera'],
+    agree: typeof r.agree === 'boolean' ? r.agree : null,
+    observation: text(r.observation) ?? '',
+    sample_id: text(one?.id),
+    sample_name: text(one?.name),
+  };
+}
+
+/** The overlay event for one tool result: point_at and check_bay only, and only when the camera answered. */
+export function erEvent(bay: BayApi, name: string, args: Loose, r: Loose, source: string, t: number = Date.now()): ErPointEvent | ErCheckEvent | null {
   if (name === 'point_at') return pointEvent(bay, r, source, t);
+  if (name === 'check_bay') return checkEvent((text(args.question) ?? '').trim().slice(0, 300), r, source, t);
   return null;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BayState, ErPointEvent } from '../contracts';
-import { insetPoint, pointCaption } from '../app/erView';
+import type { BayState, ErCheckEvent, ErPointEvent } from '../contracts';
+import { checkBadge, insetPoint, pointCaption } from '../app/erView';
 import { getRuntime } from '../app/runtime';
 import { BayScene, getBayView } from '../scene/BayScene';
 import { useBayState, useErEvent, useLastCaptureAt, useNow, useTelemetry } from './hooks';
@@ -146,11 +146,38 @@ function ErPointOverlay({ ev }: { ev: ErPointEvent }) {
   );
 }
 
+/** The last check_bay answer: the decision and who made it, and what the camera said; it fades out after ER_OVERLAY_MS. */
+function ErCheckOverlay({ ev }: { ev: ErCheckEvent }) {
+  const b = checkBadge(ev);
+  return (
+    <div className="er-overlay er-check" data-testid="er-check">
+      <div className="er-badge" data-verdict={b.verdict} role="status" aria-label={b.text} title={ev.observation ? `Camera: ${ev.observation}` : undefined}>
+        <span className="l1">
+          <span className="subj">{b.subject}:</span>
+          <b className="verdict">{b.verdict}</b>
+        </span>
+        <span className="l2">
+          {b.byText}
+          {b.camera && (
+            <>
+              {' · '}
+              <span className="cam" data-disagree={b.disagree}>
+                {b.camera}
+              </span>
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function BayCamCard() {
   const host = useRef<HTMLDivElement>(null);
   const lastAt = useLastCaptureAt();
   const now = useNow();
   const point = useErEvent('er:point');
+  const check = useErEvent('er:check');
   useEffect(() => {
     const el = host.current;
     if (!el) return;
@@ -178,6 +205,7 @@ function BayCamCard() {
       <div className="img">
         <div className="baycam-host" ref={host} />
         {point && <ErPointOverlay key={point.n} ev={point.ev} />}
+        {check && <ErCheckOverlay key={check.n} ev={check.ev} />}
       </div>
       <div className="row">
         <span>{ago === null ? "Gemini's fixed view" : ago < 2 ? 'captured just now' : `captured ${ago} s ago`}</span>

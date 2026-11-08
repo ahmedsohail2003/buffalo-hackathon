@@ -62,6 +62,28 @@ describe('events', () => {
     });
     expect(got).toEqual(['sample_2:1.5']);
   });
+
+  it('emitEr publishes a check_bay result as er:check, and only there', () => {
+    const points: unknown[] = [];
+    const checks: string[] = [];
+    subscribe('er:point', (ev) => points.push(ev));
+    subscribe('er:check', (ev) => checks.push(`${ev.decided_by}:${ev.decision}:${ev.camera}`));
+    emitEr({
+      kind: 'check',
+      t: 1,
+      source: 'coworker',
+      question: 'Is Bennu in the containment bin?',
+      decision: true,
+      decided_by: 'registry',
+      camera: 'yes',
+      agree: true,
+      observation: 'A dark rock sits in the bin.',
+      sample_id: 'sample_2',
+      sample_name: 'Bennu (NASA shape model)',
+    });
+    expect(checks).toEqual(['registry:true:yes']);
+    expect(points).toEqual([]);
+  });
 });
 
 describe('Gemini ledger', () => {
