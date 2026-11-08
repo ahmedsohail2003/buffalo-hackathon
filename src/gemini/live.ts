@@ -35,7 +35,8 @@ export const LIVE_PROMPT = [
 ].join('\n');
 
 export type LiveOutput = 'elevenlabs' | 'native';
-export type LiveState = 'off' | 'connecting' | 'ready' | 'listening' | 'thinking' | 'speaking' | 'error';
+/** 'working': a long tool call is still running (the state detail names the tool). */
+export type LiveState = 'off' | 'connecting' | 'ready' | 'listening' | 'thinking' | 'speaking' | 'working' | 'error';
 
 /** Shown when TALK was held but nothing reached the speech threshold. */
 export const NOTHING_HEARD = 'Nothing heard. Hold TALK and speak.';
@@ -370,8 +371,12 @@ export class LiveVoice {
   private renewing = false;
   private reconnects = 0;
   private muted = false;
+  /** long (NON_BLOCKING) tool calls still running: call number -> tool name */
+  private readonly running = new Map<number, string>();
+  private calls = 0;
   private turnStart = 0;
-  private firstOutputAt = 0;
+  /** the first server message that answers the turn: audio, words, a tool call or the turn's end */
+  private firstReplyAt = 0;
   private turnUsage: LiveMessageLite['usageMetadata'] | null = null;
 
   constructor(opts: LiveVoiceOptions) {
@@ -455,6 +460,10 @@ export class LiveVoice {
     if (this.outboxTimer) clearTimeout(this.outboxTimer);
     this.outboxTimer = null;
     this.awaitingModel = false;
+    this.running.clear();
+    this.turnStart = 0;
+    this.firstReplyAt = 0;
+    this.turnUsage = null;
     this.setState('off');
   }
 
@@ -538,7 +547,7 @@ export class LiveVoice {
     this.awaitingModel = true;
     this.awaitSince = this.now();
     this.turnStart = this.now();
-    this.firstOutputAt = 0;
+    this.firstReplyAt = 0;
   }
 
   /** The release tail is over: close the operator's turn, or drop it when nothing was heard. */
@@ -556,9 +565,17 @@ export class LiveVoice {
       return;
     }
     // TALK held through silence: the model gets nothing (empty audio makes it invent speech).
-    this.setState('ready', NOTHING_HEARD);
+    this.rest(NOTHING_HEARD);
     logTo(this.sink, 'voice', NOTHING_HEARD);
     this.flushOutbox();
+  }
+
+  /** Between turns: 'working' (with the tool's name) while a long tool runs, else 'ready'. */
+  private rest(detail?: string): void {
+    let tool: string | undefined;
+    for (const name of this.running.values()) tool = name; // the newest call still running
+    if (tool) this.setState('working', tool);
+    else this.setState('ready', detail);
   }
 
   /** Forget the operator's turn: no tail, no pre-roll. */
@@ -671,7 +688,7 @@ export class LiveVoice {
       if (old !== this.session) closeQuietly(old);
       logTo(this.sink, 'voice', `Voice link renewed${this.handle ? ', context resumed' : ', fresh context'}.`);
       this.awaitingModel = false;
-      if (!this.operatorTurn()) this.setState('ready');
+      if (!this.operatorTurn()) this.rest();
       this.flushOutbox();
     } catch (err) {
       if (token !== this.attempt) return;
@@ -725,16 +742,20 @@ export class LiveVoice {
   }
 
   private markOutput(): void {
-    if (!this.firstOutputAt) this.firstOutputAt = this.now();
     if (!this.operatorTurn() && this.state !== 'speaking') this.setState('speaking');
   }
 
   private onMessage(m: LiveMessageLite): void {
+    const sc = m.serverContent;
+    // Latency runs to the first message that answers the turn, so a tool-only turn is timed too
+    // (the operator's own transcription does not count).
+    if (this.turnStart && !this.firstReplyAt && (m.toolCall?.functionCalls?.length || sc?.modelTurn || sc?.outputTranscription || sc?.generationComplete || sc?.turnComplete)) {
+      this.firstReplyAt = this.now();
+    }
     const upd = m.sessionResumptionUpdate;
     if (upd?.resumable && upd.newHandle) this.handle = upd.newHandle;
     if (m.usageMetadata) this.turnUsage = m.usageMetadata;
 
-    const sc = m.serverContent;
     if (sc) {
       if (sc.interrupted) {
         this.speaker?.cancel();
@@ -771,12 +792,12 @@ export class LiveVoice {
     this.reconnects = 0;
     const u = this.turnUsage;
     this.turnUsage = null;
-    if (u || this.firstOutputAt) {
+    if (u || this.firstReplyAt) {
       this.recordEntry({
         t: Date.now(),
         model: LIVE,
         purpose: 'live',
-        latencyMs: this.turnStart && this.firstOutputAt ? Math.max(0, Math.round(this.firstOutputAt - this.turnStart)) : 0,
+        latencyMs: this.turnStart && this.firstReplyAt ? Math.max(0, Math.round(this.firstReplyAt - this.turnStart)) : 0,
         promptTokens: u?.promptTokenCount ?? 0,
         outputTokens: u?.responseTokenCount ?? 0,
         thoughtTokens: u?.thoughtsTokenCount ?? 0,
@@ -785,9 +806,9 @@ export class LiveVoice {
       });
     }
     this.turnStart = 0;
-    this.firstOutputAt = 0;
+    this.firstReplyAt = 0;
     this.events.onTurnEnd?.();
-    if (!this.operatorTurn()) this.setState('ready');
+    if (!this.operatorTurn()) this.rest();
     this.flushOutbox();
   }
 
@@ -800,6 +821,7 @@ export class LiveVoice {
   }
 
   private async onToolCalls(calls: NonNullable<LiveMessageLite['toolCall']>['functionCalls'] & object): Promise<void> {
+    const epoch = this.attempt; // a result for a link that was disconnected meanwhile is dropped
     for (const fc of calls) {
       const name = fc.name ?? '';
       const args = fc.args ?? {};
@@ -807,12 +829,17 @@ export class LiveVoice {
       if (!nonBlocking || gateRefusal(this.bay, name)) {
         // Instant answers (and refusals) go straight back; a refusal is spoken when CAPCOM is idle.
         const result = await dispatchTool(this.bay, name, args, 'live', this.toolCtx());
+        if (epoch !== this.attempt) return;
         this.events.onTool?.(`${name} -> ${summarizeResult(name, result)}`);
         this.respond(fc.id, name, result, nonBlocking ? 'WHEN_IDLE' : undefined);
         continue;
       }
       this.respond(fc.id, name, { ok: true, status: 'started', note: 'Running now. The result follows as a [BAY EVENT] message.' }, 'SILENT');
       this.events.onTool?.(`${name}(${formatArgs(args)}) started`);
+      // Until its result turn the state reads 'working', even after CAPCOM's own turn ends.
+      const call = ++this.calls;
+      this.running.set(call, name);
+      if (this.state === 'ready') this.rest();
       // An emergency stop cancels the call in flight (a design then places nothing).
       const ac = new AbortController();
       const offGate = this.bay.gate.onChange((s) => {
@@ -820,9 +847,12 @@ export class LiveVoice {
       });
       void dispatchTool(this.bay, name, args, 'live', { ...this.toolCtx(), signal: ac.signal }).then((result) => {
         offGate();
+        if (epoch !== this.attempt) return;
+        this.running.delete(call);
         const line = `${name}(${formatArgs(args)}) ${result.ok ? 'succeeded' : 'failed'}: ${summarizeResult(name, result)}`;
         this.events.onTool?.(line);
-        this.sendBayEvent(line);
+        this.sendBayEvent(line); // when it goes out at once, the state turns 'thinking'
+        if (this.state === 'working') this.rest(); // held back (no link yet): show what still runs
       });
     }
   }
@@ -837,7 +867,7 @@ export class LiveVoice {
     try {
       this.session.sendClientContent({ turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true });
       this.expectModel();
-      if (this.state === 'ready') this.setState('thinking');
+      if (this.state === 'ready' || this.state === 'working') this.setState('thinking');
     } catch (err) {
       logTo(this.sink, 'voice', `Could not send a bay event: ${errorText(err)}`);
     }

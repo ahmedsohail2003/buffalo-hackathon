@@ -98,9 +98,11 @@ function rig(opts: { state?: 'RUNNING' | 'STOPPED' | 'IDLE'; holdMic?: boolean; 
   const live = new LiveVoice({ bay, sink, speaker, connector, mic, player, tailMs: opts.tailMs ?? 0, ...(opts.now ? { now: opts.now } : {}), recordEntry: (e) => void entries.push(e) });
   const states: string[] = [];
   const transcripts: string[] = [];
+  const toolLines: string[] = [];
   live.events = {
     onState: (st, detail) => void states.push(detail ? `${st}: ${detail}` : st),
     onTranscript: (who, text) => void transcripts.push(`${who}:${text}`),
+    onTool: (line) => void toolLines.push(line),
   };
   const server = (i = callbacks.length - 1) => callbacks[i];
   const lastSent = () => sessions[sessions.length - 1].sent;
@@ -126,6 +128,7 @@ function rig(opts: { state?: 'RUNNING' | 'STOPPED' | 'IDLE'; holdMic?: boolean; 
     voiceLogs: () => logs.filter((l) => l.startsWith('voice:')).map((l) => l.slice('voice:'.length)),
     states,
     transcripts,
+    toolLines,
   };
 }
 
@@ -506,5 +509,77 @@ describe('TALK held through silence', () => {
     const sent = r.lastSent();
     expect(kinds(sent)).toEqual(['activityStart', ...Array<string>(8).fill('audio'), 'audio', 'audio', 'activityEnd']);
     expect(audioSent(sent)).toEqual([...quiet.slice(-8).map(b64), b64(justAbove), b64(NOISE)]); // the newest 320 ms, in order
+  });
+});
+
+describe('Long tools keep the state', () => {
+  it('while a long tool runs the state is "working" with its name, until its result turn', async () => {
+    const r = rig();
+    r.bay.holdMoves = true; // the arm takes its time
+    await r.live.connect();
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk();
+    r.server().onmessage({ toolCall: { functionCalls: [{ id: 'c1', name: 'pick_sample', args: { id: 's1' } }] } });
+    await settle();
+    r.server().onmessage({ serverContent: { turnComplete: true } }); // CAPCOM's turn ends with only the call
+    expect(r.live.state).toBe('working');
+    expect(r.states.slice(-1)).toEqual(['working: pick_sample']);
+    r.live.startTalk(); // the operator can still talk meanwhile
+    r.mic(LOUD);
+    r.live.endTalk();
+    expect(r.live.state).toBe('thinking');
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Still picking.' }, turnComplete: true } });
+    expect(r.live.state).toBe('working');
+    r.bay.release(); // the pick lands: its [BAY EVENT] opens the result turn
+    await settle();
+    expect(kinds(r.lastSent()).slice(-1)).toEqual(['client']);
+    expect(r.live.state).toBe('thinking');
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Holding the Bennu fragment.' } } });
+    expect(r.live.state).toBe('speaking');
+    r.server().onmessage({ serverContent: { turnComplete: true } });
+    expect(r.live.state).toBe('ready');
+  });
+
+  it('a long tool that lands after Disconnect changes nothing', async () => {
+    const r = rig();
+    r.bay.holdMoves = true;
+    await r.live.connect();
+    r.server().onmessage({ toolCall: { functionCalls: [{ id: 'c1', name: 'pick_sample', args: { id: 's1' } }] } });
+    await settle();
+    r.live.disconnect();
+    const lines = r.toolLines.length;
+    r.bay.release();
+    await settle();
+    expect(r.toolLines).toHaveLength(lines);
+    expect(r.states.slice(-1)).toEqual(['off']);
+  });
+});
+
+describe('Live ledger latency', () => {
+  it('a turn with no audio or words is timed to its first reply message (the tool call), not 0 ms', async () => {
+    let now = 1_000;
+    const r = rig({ now: () => now });
+    await r.live.connect();
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk(); // activityEnd at t = 1000
+    now = 1_200;
+    r.server().onmessage({ serverContent: { inputTranscription: { text: 'Go home.' } } }); // the operator's words are not a reply
+    now = 1_852;
+    r.server().onmessage({ toolCall: { functionCalls: [{ id: 'h1', name: 'go_home', args: {} }] } });
+    now = 1_855;
+    r.server().onmessage({ usageMetadata: { promptTokenCount: 1905, responseTokenCount: 15 }, serverContent: { turnComplete: true } });
+    expect(r.entries).toHaveLength(1);
+    expect(r.entries[0]).toMatchObject({ purpose: 'live', latencyMs: 852, promptTokens: 1905, outputTokens: 15 });
+    // the result turn: timed to its first audio
+    now = 2_000;
+    await settle(); // go_home lands; its [BAY EVENT] goes out at t = 2000
+    expect(kinds(r.lastSent()).slice(-1)).toEqual(['client']);
+    now = 2_530;
+    r.server().onmessage({ serverContent: { modelTurn: { parts: [{ inlineData: { data: 'AAAA', mimeType: 'audio/pcm;rate=24000' } }] } } });
+    now = 3_400;
+    r.server().onmessage({ serverContent: { turnComplete: true } });
+    expect(r.entries[1].latencyMs).toBe(530);
   });
 });
