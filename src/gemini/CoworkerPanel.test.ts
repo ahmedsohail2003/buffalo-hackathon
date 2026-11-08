@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { makeFakeBay } from './__fixtures__/fakeBay';
 import { getGeminiClient } from './client';
 import type { ToolTrace } from './coworker';
-import { CoworkerPanel, replySound } from './CoworkerPanel';
+import { CoworkerPanel, replySound, requestNote } from './CoworkerPanel';
 import { nullSink } from './types';
 
 describe('CoworkerPanel', () => {
@@ -33,5 +33,11 @@ describe('CoworkerPanel', () => {
     expect(replySound({ tools: [pick, trace('place_sample', true)] })).toBe('task-done');
     expect(replySound({ tools: [refusedPlace] })).toBe('reject');
     expect(replySound({ tools: [trace('describe_bay', true)] })).toBeNull();
+  });
+
+  it('a typed request in flight while the bay is STOPPED is shown as paused by the operator', () => {
+    expect(requestNote(true, 'STOPPED')).toBe('Paused by the operator: thumbs up to resume.');
+    for (const state of ['IDLE', 'RUNNING', 'SLOW', 'ESTOPPED', null] as const) expect(requestNote(true, state)).toBeNull();
+    expect(requestNote(false, 'STOPPED')).toBeNull();
   });
 });

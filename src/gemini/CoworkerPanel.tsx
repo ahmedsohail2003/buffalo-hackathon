@@ -3,7 +3,7 @@
 // Props: the bay (null until the arm core is up) and the log sink; optionally the fabricator and
 // the registry's containment check. Class names start with sh-cw- for the shell's theme.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react';
-import type { BayApi, GeminiCallEntry, Sample } from '../contracts';
+import type { BayApi, BayState, GeminiCallEntry, Sample } from '../contracts';
 import { getSpeaker, type SpeakerLike } from '../voice/elevenSpeaker';
 import { playSfx, type SfxName } from '../voice/sfx';
 import { getGeminiClient, usingDevKey } from './client';
@@ -65,6 +65,7 @@ const s: Record<string, CSSProperties> = {
   chips: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   chip: { fontSize: 11, padding: '2px 8px', borderRadius: 999, border: `1px solid ${c.border}`, color: c.dim },
   log: { flex: 1, minHeight: 120, maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, lineHeight: 1.35 },
+  note: { fontSize: 12, color: c.warn, border: `1px solid ${c.warn}`, borderRadius: 6, padding: '4px 8px' },
   form: { display: 'flex', gap: 6 },
   input: { flex: 1, minWidth: 0, padding: '6px 8px', background: 'transparent', color: c.text, border: `1px solid ${c.border}`, borderRadius: 6, font: 'inherit' },
   button: { padding: '6px 12px', background: 'transparent', color: c.text, border: `1px solid ${c.border}`, borderRadius: 6, font: 'inherit', cursor: 'pointer' },
@@ -96,6 +97,13 @@ export function replySound(reply: Pick<CoworkerReply, 'tools' | 'stopped'>): Sfx
   return null;
 }
 
+export const PAUSED_NOTE = 'Paused by the operator: thumbs up to resume.';
+
+/** What the panel says about a typed request in flight: the operator's STOP pauses it (the arm waits). */
+export function requestNote(busy: boolean, state: BayState | null): string | null {
+  return busy && state === 'STOPPED' ? PAUSED_NOTE : null;
+}
+
 export function CoworkerPanel(props: CoworkerPanelProps) {
   const { bay, className, style } = props;
   const propsRef = useRef(props);
@@ -110,6 +118,7 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
   const [output, setOutput] = useState<LiveOutput>('elevenlabs');
   const [muted, setMuted] = useState(false);
   const [talking, setTalking] = useState(false);
+  const [gate, setGate] = useState<BayState | null>(() => bay?.gate.state() ?? null);
   const [ledger, setLedger] = useState<readonly GeminiCallEntry[]>(() => getGeminiClient().recent());
 
   const coworkerRef = useRef<Coworker | null>(null);
@@ -171,7 +180,9 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
     const cw = new Coworker(bay, { tools });
     cw.onTool = (t) => add('tool', `${t.name}: ${t.summary}`);
     coworkerRef.current = cw;
+    setGate(bay.gate.state());
     const offGate = bay.gate.onChange((st) => {
+      setGate(st);
       const live = liveRef.current;
       if (live?.connected) live.sendBayEvent(`Bay state is now ${st}.`);
     });
@@ -286,6 +297,7 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
 
   const recent = ledger.slice(-LEDGER_ROWS).reverse();
   const total = ledger.reduce((sum, e) => sum + (Number.isFinite(e.costUsd) ? e.costUsd : 0), 0);
+  const note = requestNote(busy, gate);
 
   return (
     <section className={`sh-cw ${className ?? ''}`} style={{ ...s.panel, ...style }} aria-label="CAPCOM, the Gemini coworker">
@@ -317,6 +329,12 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
         ))}
         {voice.state === 'error' && voice.detail && <div style={{ color: c.bad }}>{voice.detail}</div>}
       </div>
+
+      {note && (
+        <div className="sh-cw-note" style={s.note} role="status">
+          {note}
+        </div>
+      )}
 
       <form style={s.form} onSubmit={run}>
         <input
