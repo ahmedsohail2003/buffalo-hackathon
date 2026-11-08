@@ -73,11 +73,17 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'place_sample',
     description:
-      `Put the held sample down on the deck at x_mm, y_mm. ${BAY_FRAME_TEXT} Reachable: ${BAY_FACTS.reach.minMm} to ${BAY_FACTS.reach.maxMm} mm from the base, within ${BAY_FACTS.reach.bearingDeg} degrees of straight ahead. Code checks reach and spacing and may refuse.`,
+      `Put the held sample down on the deck. Easiest: give side (left, right, front, behind or center of the deck) and code chooses a free, checked spot there. Or give relative_to (a sample id, "containment" or "arm") with a direction and optional distance_mm; or nothing, for any free spot. Exact x_mm and y_mm also work; if code refuses that spot, the result suggests the nearest free one. ${BAY_FRAME_TEXT} Reachable: ${BAY_FACTS.reach.minMm} to ${BAY_FACTS.reach.maxMm} mm from the base, within ${BAY_FACTS.reach.bearingDeg} degrees of straight ahead. Parts need ${BAY_FACTS.spacingMinMm} mm or more between centres and must keep clear of the containment bin. Code checks reach and spacing and may refuse.`,
     parameters: {
       type: 'OBJECT',
-      properties: { x_mm: MM('deck x in mm'), y_mm: MM('deck y in mm') },
-      required: ['x_mm', 'y_mm'],
+      properties: {
+        side: { type: 'STRING', enum: ['left', 'right', 'front', 'behind', 'center'], description: 'part of the deck; code picks a free spot there' },
+        relative_to: { type: 'STRING', description: 'a sample id, "containment" or "arm"' },
+        direction: { type: 'STRING', enum: ['left', 'right', 'front', 'behind'] },
+        distance_mm: MM('distance from relative_to in mm'),
+        x_mm: MM('deck x in mm'),
+        y_mm: MM('deck y in mm'),
+      },
     },
   },
   {
@@ -278,9 +284,34 @@ function badArgs(reason: string): ToolResult {
   return { ok: false, code: 'BAD_ARGS', reason };
 }
 
+/** A refusal as a tool result; the suggestion (for example the nearest free spot) passes through. */
+function asRefusal(r: { code: string; reason: string; suggestion?: string }): ToolResult {
+  return { ok: false, code: r.code, reason: r.reason, ...(r.suggestion ? { suggestion: r.suggestion } : {}) };
+}
+
 function fromMove(r: MoveResult, extra: Record<string, unknown> = {}): ToolResult {
   if (r.ok) return { ok: true, holding: r.held, tcp_mm: r.tcp_mm.map((v) => Math.round(v)), ...extra };
-  return { ok: false, code: r.code, reason: r.reason };
+  return asRefusal(r);
+}
+
+const DIRECTIONS: ReadonlySet<string> = new Set(['left', 'right', 'front', 'behind']);
+const SIDES: ReadonlySet<string> = new Set(['left', 'right', 'front', 'behind', 'center']);
+
+/** The relative placement arguments design_sample and place_sample share. */
+function relativePlacement(a: Record<string, unknown>): Placement {
+  const p: Placement = {};
+  const rel = str(a, 'relative_to');
+  const dir = str(a, 'direction');
+  const dist = num(a, 'distance_mm');
+  if (rel) p.relative_to = rel;
+  if (dir && DIRECTIONS.has(dir)) p.direction = dir as Placement['direction'];
+  if (dist !== undefined) p.distance_mm = dist;
+  return p;
+}
+
+/** true when the argument was given at all (null counts as left out) */
+function given(a: Record<string, unknown>, k: string): boolean {
+  return a[k] !== undefined && a[k] !== null;
 }
 
 /** A sample by id, or by a unique name match (models sometimes pass the name). */
@@ -377,12 +408,30 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
       return fromMove(await bay.arm.pick(s.id), { sample: s.id, name: s.name });
     }
     case 'place_sample': {
-      const x = num(a, 'x_mm');
-      const y = num(a, 'y_mm');
-      if (x === undefined || y === undefined) return badArgs('place_sample needs x_mm and y_mm.');
       const heldId = bay.arm.snapshot().heldId;
-      const r = await bay.arm.placeAt([x / 1000, y / 1000]);
-      return fromMove(r, { sample: heldId, placed_mm: [Math.round(x), Math.round(y)] });
+      if (given(a, 'x_mm') || given(a, 'y_mm')) {
+        // an exact spot: the arm checks it; a refusal names the nearest free spot
+        const x = num(a, 'x_mm');
+        const y = num(a, 'y_mm');
+        if (x === undefined || y === undefined) return badArgs('place_sample needs both x_mm and y_mm as numbers, or neither (then give side, or relative_to and direction).');
+        const r = await bay.arm.placeAt([x / 1000, y / 1000]);
+        return fromMove(r, { sample: heldId, placed_mm: [Math.round(x), Math.round(y)] });
+      }
+      const placement = relativePlacement(a);
+      const side = str(a, 'side');
+      if (side !== undefined && !SIDES.has(side)) return badArgs('side must be left, right, front, behind or center.');
+      if (side) placement.side = side as Placement['side'];
+      // a direction with nothing to be relative to means that side of the deck
+      if (!placement.relative_to && !placement.side && placement.direction) {
+        placement.side = placement.direction;
+        delete placement.direction;
+      }
+      if (!heldId) return { ok: false, code: 'NOTHING_HELD', reason: 'The gripper is not holding anything to place.' };
+      // code chooses the spot: free, reachable, spaced and clear of the bin
+      const spot = bay.samples.findSpot(heldId, placement);
+      if (!spot.ok) return asRefusal(spot);
+      const r = await bay.arm.placeAt(spot.xy);
+      return fromMove(r, { sample: heldId, placed_mm: [Math.round(spot.xy[0] * 1000), Math.round(spot.xy[1] * 1000)] });
     }
     case 'place_in_containment': {
       const heldId = bay.arm.snapshot().heldId;
@@ -397,17 +446,11 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
       const description = str(a, 'description');
       if (!description) return badArgs('design_sample needs a description.');
       if (!c.fabricate) return { ...FABRICATOR_OFFLINE };
-      const placement: Placement = {};
+      const placement = relativePlacement(a);
       const x = num(a, 'x_mm');
       const y = num(a, 'y_mm');
-      const dist = num(a, 'distance_mm');
-      const rel = str(a, 'relative_to');
-      const dir = str(a, 'direction');
       if (x !== undefined) placement.x_mm = x;
       if (y !== undefined) placement.y_mm = y;
-      if (rel) placement.relative_to = rel;
-      if (dir === 'left' || dir === 'right' || dir === 'front' || dir === 'behind') placement.direction = dir;
-      if (dist !== undefined) placement.distance_mm = dist;
       const r = await c.fabricate(
         bay,
         description.slice(0, 300),
@@ -484,6 +527,8 @@ function summaryLine(name: string, r: ToolResult): string {
     const reason = typeof r.reason === 'string' ? r.reason : 'refused';
     if (name === 'check_bay' && 'answer' in r) return checkBaySummary(r);
     if (name === 'point_at' && !('code' in r)) return `not found: ${reason}`;
+    const tip = typeof r.suggestion === 'string' ? r.suggestion.trim() : '';
+    if (tip) return `refused (${String(r.code ?? 'ERROR')}): ${sentence(reason)} ${sentence(tip[0].toUpperCase() + tip.slice(1))}`;
     return `refused (${String(r.code ?? 'ERROR')}): ${reason}`;
   }
   switch (name) {

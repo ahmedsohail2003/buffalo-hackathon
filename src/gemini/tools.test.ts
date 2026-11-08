@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BayState, LogLine } from '../contracts';
 import { fakeProject, makeFakeBay, makeSample, type FakeBay } from './__fixtures__/fakeBay';
+import { BAY_FACTS_TEXT } from './bayFacts';
 import type { CallFn, CallResult } from './client';
 import { MOVING_TOOLS, TOOL_DECLARATIONS, dispatchTool, liveToolDeclarations, summarizeResult, type ToolContext } from './tools';
 import type { FabricateFn } from './types';
@@ -320,6 +321,89 @@ describe('tools: a camera check first moves an empty, idle arm clear of the view
     const note = 'The gripper is holding Itokawa (NASA/JAXA shape model), so it may hide the sample from the camera.';
     expect(r).toMatchObject({ ok: false, decided_by: 'code', note });
     expect(lines[1].text).toBe(`[test] check_bay -> no (registry decides); camera says yes: Itokawa is in the gripper. ${note}`);
+  });
+});
+
+describe('tools: place_sample lets code choose the spot', () => {
+  const bennuSeed = makeSample({ id: 'sample_2', name: 'Bennu (NASA shape model)', kind: 'mesh', dims: { w: 0.031, d: 0.03, h: 0.03 }, pos: [0.056, -0.155, 0.015] });
+  const itokawaSeed = makeSample({ id: 'sample_3', name: 'Itokawa (NASA/JAXA shape model)', kind: 'mesh', dims: { w: 0.03, d: 0.022, h: 0.02 }, pos: [-0.051, -0.157, 0.01] });
+
+  /** Bennu in the gripper; findSpot records what it is asked and answers with `answer` */
+  async function holdingBennu(answer: ReturnType<FakeBay['samples']['findSpot']> = { ok: true, xy: [-0.16, -0.08] }) {
+    const bay = makeFakeBay({ samples: [bennuSeed, itokawaSeed] });
+    await bay.arm.pick('sample_2');
+    bay.calls.length = 0;
+    const asked: unknown[] = [];
+    bay.samples.findSpot = (id, placement) => {
+      asked.push([id, placement]);
+      return answer;
+    };
+    return { bay, asked };
+  }
+
+  it('side, relative_to + direction, or nothing: findSpot for the held sample, then the arm places there', async () => {
+    const { bay, asked } = await holdingBennu();
+    const { c, lines } = ctx();
+    expect(await dispatchTool(bay, 'place_sample', { side: 'left' }, 'coworker', c)).toMatchObject({ ok: true, sample: 'sample_2', placed_mm: [-160, -80] });
+    expect(bay.calls).toEqual([{ fn: 'placeAt', args: [[-0.16, -0.08]] }]);
+    expect(lines[1].text).toBe('[coworker] place_sample -> ok, sample_2 down at (-160, -80) mm');
+    for (const args of [{ relative_to: 'sample_3', direction: 'behind', distance_mm: 60 }, {}, { direction: 'left' }]) {
+      await bay.arm.pick('sample_2');
+      expect(await dispatchTool(bay, 'place_sample', args, 'test')).toMatchObject({ ok: true });
+    }
+    expect(asked).toEqual([
+      ['sample_2', { side: 'left' }],
+      ['sample_2', { relative_to: 'sample_3', direction: 'behind', distance_mm: 60 }],
+      ['sample_2', {}],
+      ['sample_2', { side: 'left' }], // a direction with nothing to be relative to means that side of the deck
+    ]);
+  });
+
+  it('a spot code refuses comes back with its reason and suggestion, and nothing moves', async () => {
+    const reason = 'there is no free spot on the left of the deck for Bennu (NASA shape model).';
+    const { bay } = await holdingBennu({ ok: false, code: 'NO_SPOT', reason, suggestion: 'try another side, or leave the side out for any free spot' });
+    const { c, lines } = ctx();
+    expect(await dispatchTool(bay, 'place_sample', { side: 'left' }, 'test', c)).toEqual({
+      ok: false,
+      code: 'NO_SPOT',
+      reason,
+      suggestion: 'try another side, or leave the side out for any free spot',
+    });
+    expect(bay.calls).toEqual([]);
+    expect(lines[1].text).toBe(`[test] place_sample -> refused (NO_SPOT): ${reason} Try another side, or leave the side out for any free spot.`);
+  });
+
+  it('exact x/y go straight to the arm; its refusal passes the suggested free spot through', async () => {
+    const { bay, asked } = await holdingBennu();
+    const reason = 'that spot is 24 mm from Itokawa (NASA/JAXA shape model); leave at least 44 mm between their centres so the jaw has room.';
+    bay.nextMove = { ok: false, code: 'UNREACHABLE', reason, suggestion: 'try (-127, -59) mm' };
+    const { c, lines } = ctx();
+    expect(await dispatchTool(bay, 'place_sample', { x_mm: -70, y_mm: -165 }, 'test', c)).toEqual({ ok: false, code: 'UNREACHABLE', reason, suggestion: 'try (-127, -59) mm' });
+    expect(bay.calls).toEqual([{ fn: 'placeAt', args: [[-0.07, -0.165]] }]);
+    expect(asked).toEqual([]);
+    expect(lines[1].text).toBe(`[test] place_sample -> refused (UNREACHABLE): ${reason} Try (-127, -59) mm.`);
+  });
+
+  it('validates its arguments and needs something in the gripper', async () => {
+    const { bay, asked } = await holdingBennu();
+    expect(await dispatchTool(bay, 'place_sample', { x_mm: -70 }, 'test')).toMatchObject({ ok: false, code: 'BAD_ARGS' });
+    expect(await dispatchTool(bay, 'place_sample', { x_mm: -70, y_mm: 'far' }, 'test')).toMatchObject({ ok: false, code: 'BAD_ARGS' });
+    expect(await dispatchTool(bay, 'place_sample', { side: 'up' }, 'test')).toMatchObject({ ok: false, code: 'BAD_ARGS' });
+    const empty = makeFakeBay({ samples: [bennuSeed] });
+    expect(await dispatchTool(empty, 'place_sample', { side: 'left' }, 'test')).toEqual({ ok: false, code: 'NOTHING_HELD', reason: 'The gripper is not holding anything to place.' });
+    expect(asked).toEqual([]);
+    expect(bay.calls).toEqual([]);
+  });
+
+  it('the declaration and the bay facts tell the model how: side, spacing and the bin keep-out', () => {
+    const d = TOOL_DECLARATIONS.find((x) => x.name === 'place_sample');
+    expect(d?.parameters?.required).toBeUndefined();
+    expect(Object.keys(d?.parameters?.properties ?? {}).sort()).toEqual(['direction', 'distance_mm', 'relative_to', 'side', 'x_mm', 'y_mm']);
+    expect(d?.parameters?.properties?.side?.enum).toEqual(['left', 'right', 'front', 'behind', 'center']);
+    expect(d?.description).toContain('give side');
+    expect(BAY_FACTS_TEXT).toContain('40 mm or more between centres');
+    expect(BAY_FACTS_TEXT).toContain('the bin has a keep-out');
+    expect(BAY_FACTS_TEXT).toContain('give place_sample a side of the deck (left, right, front, behind or center) and code chooses a free spot there');
   });
 });
 
