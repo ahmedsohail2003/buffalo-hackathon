@@ -4,9 +4,10 @@
 // read-only tools always answer. Every call is a log line.
 // No DOM at import time.
 import type { BayApi, MoveResult, Placement, Sample } from '../contracts';
+import { HOME_Q } from '../core/constants';
 import { BAY_FACTS, BAY_FRAME_TEXT, defaultInContainment } from './bayFacts';
 import { errorText, generateJson as defaultGenerateJson, type CallFn } from './client';
-import { matchSample, pointAt, verifyQuestion } from './er';
+import { matchSample, mentionedSamples, pointAt, verifyQuestion } from './er';
 import { logTo, type FabricateFn, type FabricatorDeps, type LogSink } from './types';
 
 export type ToolName =
@@ -304,7 +305,39 @@ function chosenSample(bay: BayApi, a: Record<string, unknown>): { sample?: Sampl
   return sample ? { sample } : { refusal: noSuchSample(bay, ref) };
 }
 
-async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c: ToolContext): Promise<ToolResult> {
+/** How close (xy, mm) the gripper may be to the bin centre or to the sample a camera check is about. */
+export const CAMERA_CLEAR_MM = 70;
+/** A question or label about containment. */
+const ABOUT_BIN = /\b(contain\w*|bin|tray)\b/i;
+
+/**
+ * Before a camera check: an open gripper parked over the bin or the sample looks, on camera, as if it
+ * held the sample. When the bay is RUNNING and the arm is idle and empty, with its TCP within
+ * CAMERA_CLEAR_MM (xy) of the bin centre (a question about containment) or of a sample in question,
+ * move it home first. Never in another bay state and never while holding: then the result carries a
+ * note that the gripper may hide the sample.
+ */
+async function clearCameraView(bay: BayApi, text: string, about: Sample[], c: ToolContext, source: ToolSource): Promise<string | undefined> {
+  const arm = bay.arm.snapshot();
+  const near = (x: number, y: number) => Math.hypot(arm.tcp[0] - x, arm.tcp[1] - y) * 1000 <= CAMERA_CLEAR_MM;
+  const bin = c.containmentMm ?? BAY_FACTS.containmentMm;
+  if (!(ABOUT_BIN.test(text) && near(bin[0] / 1000, bin[1] / 1000)) && !about.some((s) => near(s.pos[0], s.pos[1]))) return undefined;
+  if (arm.heldId) {
+    const held = bay.samples.get(arm.heldId);
+    return `The gripper is holding ${held?.name ?? arm.heldId}, so it may hide the sample from the camera.`;
+  }
+  if (bay.gate.state() !== 'RUNNING' || arm.busy || atHome(arm.q)) return undefined;
+  logTo(c.sink, 'gemini', `[${source}] moving the arm clear of the camera first`);
+  await bay.arm.home();
+  return undefined;
+}
+
+/** Already in the home pose (joints 0-4 within about a degree): its TCP is close to two seed slots, but it hides nothing. */
+function atHome(q: number[]): boolean {
+  return HOME_Q.slice(0, 5).every((h, j) => Math.abs((q[j] ?? Number.NaN) - h) < 0.02);
+}
+
+async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c: ToolContext, source: ToolSource): Promise<ToolResult> {
   switch (name) {
     case 'describe_bay':
       return describeBay(bay, c.containmentMm);
@@ -315,14 +348,20 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
       if (!question) return badArgs('check_bay needs a question.');
       const { sample, refusal } = chosenSample(bay, a);
       if (refusal) return refusal;
-      return { ...(await verifyQuestion(bay, question.slice(0, 300), { call: c.call, inContainment: c.inContainment, signal: c.signal }, sample?.id)) };
+      const q = question.slice(0, 300);
+      const note = await clearCameraView(bay, q, sample ? [sample] : mentionedSamples(bay.samples.list(), q), c, source);
+      const r = await verifyQuestion(bay, q, { call: c.call, inContainment: c.inContainment, signal: c.signal }, sample?.id);
+      return { ...r, ...(note ? { note } : {}) };
     }
     case 'point_at': {
       const label = str(a, 'label');
       if (!label) return badArgs('point_at needs a label.');
       const { sample, refusal } = chosenSample(bay, a);
       if (refusal) return refusal;
-      return { ...(await pointAt(bay, label.slice(0, 120), { call: c.call, signal: c.signal }, sample?.id)) };
+      const l = label.slice(0, 120);
+      const note = await clearCameraView(bay, l, sample ? [sample] : mentionedSamples(bay.samples.list(), l), c, source);
+      const r = await pointAt(bay, l, { call: c.call, signal: c.signal }, sample?.id);
+      return { ...r, ...(note ? { note } : {}) };
     }
   }
 
@@ -400,7 +439,7 @@ export async function dispatchTool(
   logTo(c.sink, 'gemini', `[${source}] ${name}(${formatArgs(a)})`);
   let result: ToolResult;
   try {
-    result = await runTool(bay, name, a, c);
+    result = await runTool(bay, name, a, c, source);
   } catch (err) {
     result = { ok: false, code: 'TOOL_ERROR', reason: `${name} failed: ${errorText(err)}`.slice(0, 220) };
   }
@@ -428,8 +467,19 @@ function checkBaySummary(r: ToolResult): string {
   return obs ? `${head}: ${obs}` : head;
 }
 
-/** One short line for the log, the chat and the Live [BAY EVENT] messages. */
+/** text that ends in exactly one full stop (or the ? or ! it already has) */
+function sentence(s: string): string {
+  const t = s.trim();
+  return !t || /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
+/** One short line for the log, the chat and the Live [BAY EVENT] messages (a camera check's note included). */
 export function summarizeResult(name: string, r: ToolResult): string {
+  const line = summaryLine(name, r);
+  return (name === 'check_bay' || name === 'point_at') && typeof r.note === 'string' ? `${sentence(line)} ${r.note}` : line;
+}
+
+function summaryLine(name: string, r: ToolResult): string {
   if (!r.ok) {
     const reason = typeof r.reason === 'string' ? r.reason : 'refused';
     if (name === 'check_bay' && 'answer' in r) return checkBaySummary(r);

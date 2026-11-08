@@ -1,8 +1,11 @@
 // Test double for BayApi: an in-memory registry, a scripted arm and gate, and an invertible
 // oblique camera model so pointing math can be checked exactly. Tests only.
 import type { ArmSnapshot, BayApi, BayState, FrameCapture, MoveResult, Sample, Vec3 } from '../../contracts';
+import { HOME_Q } from '../../core/constants';
 
 export const FAKE_CONTAINMENT: [number, number] = [-0.127, -0.127];
+/** where home() leaves the TCP, metres (the real arm's home pose is about (-1, -110, 76) mm) */
+export const FAKE_HOME_TCP: Vec3 = [0, -0.11, 0.076];
 
 export function makeSample(p: Partial<Sample> & { id: string }): Sample {
   const dims = p.dims ?? { w: 0.03, d: 0.03, h: 0.03 };
@@ -38,6 +41,8 @@ export interface FakeBay extends BayApi {
   holdMoves: boolean;
   release(): void;
   sampleList: Sample[];
+  /** what snapshot() reports as busy */
+  armBusy: boolean;
 }
 
 export function makeFakeBay(opts: { samples?: Sample[]; state?: BayState } = {}): FakeBay {
@@ -47,6 +52,8 @@ export function makeFakeBay(opts: { samples?: Sample[]; state?: BayState } = {})
   const sampleListeners = new Set<() => void>();
   let heldId: string | null = samples.find((s) => s.held)?.id ?? null;
   let tcp: Vec3 = [0, -0.15, 0.12];
+  /** joints: away from home until home() runs */
+  let q: number[] = [0, 0, 0, 0, 0, 0];
   const waiters: Array<() => void> = [];
 
   const bay: FakeBay = {
@@ -54,6 +61,7 @@ export function makeFakeBay(opts: { samples?: Sample[]; state?: BayState } = {})
     nextMove: null,
     holdMoves: false,
     sampleList: samples,
+    armBusy: false,
     release() {
       while (waiters.length) waiters.shift()?.();
     },
@@ -102,6 +110,7 @@ export function makeFakeBay(opts: { samples?: Sample[]; state?: BayState } = {})
         heldId = id;
         s.held = true;
         tcp = [s.pos[0], s.pos[1], 0.08];
+        q = [0, 0, 0, 0, 0, 0];
         return { ok: true, tcp_mm: mm(tcp), held: id };
       }),
       placeAt: (xy) => move('placeAt', [xy], () => {
@@ -111,6 +120,7 @@ export function makeFakeBay(opts: { samples?: Sample[]; state?: BayState } = {})
         s.held = false;
         heldId = null;
         tcp = [xy[0], xy[1], 0.08];
+        q = [0, 0, 0, 0, 0, 0];
         return { ok: true, tcp_mm: mm(tcp), held: null };
       }),
       placeInContainment: () => move('placeInContainment', [], () => {
@@ -119,14 +129,21 @@ export function makeFakeBay(opts: { samples?: Sample[]; state?: BayState } = {})
         s.pos = [FAKE_CONTAINMENT[0], FAKE_CONTAINMENT[1], s.dims.h / 2];
         s.held = false;
         heldId = null;
+        tcp = [FAKE_CONTAINMENT[0], FAKE_CONTAINMENT[1], 0.06]; // like the real arm: the open gripper retreats straight up
+        q = [0, 0, 0, 0, 0, 0];
         return { ok: true, tcp_mm: mm(tcp), held: null };
       }),
-      home: () => move('home', [], () => ({ ok: true, tcp_mm: mm(tcp), held: heldId })),
+      home: () =>
+        move('home', [], () => {
+          tcp = [...FAKE_HOME_TCP];
+          q = [...HOME_Q];
+          return { ok: true, tcp_mm: mm(tcp), held: heldId };
+        }),
       servoTo: () => {},
       abortAll: (reason) => {
         bay.calls.push({ fn: 'abortAll', args: [reason] });
       },
-      snapshot: (): ArmSnapshot => ({ q: [0, 0, 0, 0, 0, 0], tcp, jawOpen: 1, phase: 'idle', heldId, busy: false }),
+      snapshot: (): ArmSnapshot => ({ q: [...q], tcp, jawOpen: 1, phase: 'idle', heldId, busy: bay.armBusy }),
     },
     capture: (): FrameCapture => {
       bay.calls.push({ fn: 'capture', args: [] });

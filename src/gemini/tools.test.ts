@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { LogLine } from '../contracts';
-import { fakeProject, makeFakeBay, makeSample } from './__fixtures__/fakeBay';
+import type { BayState, LogLine } from '../contracts';
+import { fakeProject, makeFakeBay, makeSample, type FakeBay } from './__fixtures__/fakeBay';
 import type { CallFn, CallResult } from './client';
 import { MOVING_TOOLS, TOOL_DECLARATIONS, dispatchTool, liveToolDeclarations, summarizeResult, type ToolContext } from './tools';
 import type { FabricateFn } from './types';
@@ -241,6 +241,85 @@ describe('tools: the check_bay summary leads with the decision', () => {
     const { c, lines } = ctx({ call: async () => ({ text: '{"answer":"no","observation":"The bin looks empty."}' }) as CallResult, inContainment: () => true });
     await dispatchTool(bay, 'check_bay', { question: 'Is the Bennu fragment inside the containment bin?' }, 'coworker', c);
     expect(lines[1].text).toBe('[coworker] check_bay -> yes (registry decides); camera says no: The bin looks empty.');
+  });
+});
+
+describe('tools: a camera check first moves an empty, idle arm clear of the view', () => {
+  const cubeSeed = makeSample({ id: 'sample_1', name: 'sample cube', dims: { w: 0.024, d: 0.024, h: 0.024 }, pos: [0, -0.165, 0.012] });
+  const itokawaSeed = makeSample({ id: 'sample_3', name: 'Itokawa (NASA/JAXA shape model)', kind: 'mesh', dims: { w: 0.03, d: 0.022, h: 0.02 }, pos: [-0.051, -0.157, 0.01] });
+  const binQuestion = { question: 'Is the sample cube inside the containment bin?' };
+  const yes: CallFn = async () => ({ text: '{"answer":"yes","observation":"The cube sits in the bin."}' }) as CallResult;
+  const fns = (bay: FakeBay) => bay.calls.map((x) => x.fn);
+
+  /** the cube stowed: the open gripper is left straight above the bin, as the real arm leaves it */
+  async function stowed(state: BayState = 'RUNNING'): Promise<FakeBay> {
+    const bay = makeFakeBay({ samples: [cubeSeed, itokawaSeed] });
+    await bay.arm.pick('sample_1');
+    await bay.arm.placeInContainment();
+    bay.calls.length = 0;
+    bay.setState(state);
+    return bay;
+  }
+
+  it('RUNNING, idle and empty over the bin: home first (logged), then the frame', async () => {
+    const bay = await stowed();
+    const { c, lines } = ctx({ call: yes });
+    const r = await dispatchTool(bay, 'check_bay', binQuestion, 'coworker', c);
+    expect(fns(bay)).toEqual(['home', 'capture']);
+    expect(lines.map((l) => l.text)).toEqual([
+      '[coworker] check_bay(question: "Is the sample cube inside the containment bin?")',
+      '[coworker] moving the arm clear of the camera first',
+      '[coworker] check_bay -> yes (registry decides); camera says yes: The cube sits in the bin.',
+    ]);
+    expect(r).toMatchObject({ ok: true, decided_by: 'code', agree: true });
+    expect(r).not.toHaveProperty('note');
+  });
+
+  it('near the sample in question it moves clear too (point_at as well); far from it, or already home, it does not', async () => {
+    const bay = makeFakeBay({ samples: [cubeSeed, itokawaSeed] });
+    await bay.arm.pick('sample_3');
+    await bay.arm.placeAt([itokawaSeed.pos[0], itokawaSeed.pos[1]]); // the gripper is left above Itokawa
+    bay.calls.length = 0;
+    const [y, x] = fakeProject(itokawaSeed.pos).map(Math.round);
+    const point: CallFn = async () => ({ text: `[{"point": [${y}, ${x}], "label": "Itokawa"}]` }) as CallResult;
+    const r = await dispatchTool(bay, 'point_at', { label: 'the Itokawa sample' }, 'test', { call: point });
+    expect(fns(bay)).toEqual(['home', 'capture']);
+    expect(r).toMatchObject({ ok: true, match: { id: 'sample_3' } });
+    // now at home: about 69 mm from Itokawa and 55 mm from the cube, but a parked-home arm hides nothing
+    bay.calls.length = 0;
+    await dispatchTool(bay, 'check_bay', { question: 'Is Itokawa on the grid?' }, 'test', { call: yes });
+    expect(fns(bay)).toEqual(['capture']);
+    // over the bin, a question about a sample elsewhere and not about the bin: no move
+    const far = await stowed();
+    await dispatchTool(far, 'check_bay', { question: 'Is Itokawa on the grid?' }, 'test', { call: yes });
+    expect(fns(far)).toEqual(['capture']);
+  });
+
+  it('never moves unless the bay is RUNNING and the arm is idle', async () => {
+    for (const state of ['IDLE', 'SLOW', 'STOPPED', 'ESTOPPED'] as const) {
+      const bay = await stowed(state);
+      const { c, lines } = ctx({ call: yes });
+      await dispatchTool(bay, 'check_bay', binQuestion, 'test', c);
+      expect(fns(bay)).toEqual(['capture']);
+      expect(lines.some((l) => l.text.includes('moving the arm clear'))).toBe(false);
+      expect(bay.gate.state()).toBe(state);
+    }
+    const busy = await stowed();
+    busy.armBusy = true;
+    await dispatchTool(busy, 'check_bay', binQuestion, 'test', { call: yes });
+    expect(fns(busy)).toEqual(['capture']);
+  });
+
+  it('never moves while holding: the result and its summary say the gripper may hide the sample', async () => {
+    const bay = makeFakeBay({ samples: [cubeSeed, itokawaSeed] });
+    await bay.arm.pick('sample_3'); // the gripper is right above Itokawa, holding it
+    bay.calls.length = 0;
+    const { c, lines } = ctx({ call: async () => ({ text: '{"answer":"yes","observation":"Itokawa is in the gripper."}' }) as CallResult });
+    const r = await dispatchTool(bay, 'check_bay', { question: 'Is Itokawa inside the containment bin?' }, 'test', c);
+    expect(fns(bay)).toEqual(['capture']);
+    const note = 'The gripper is holding Itokawa (NASA/JAXA shape model), so it may hide the sample from the camera.';
+    expect(r).toMatchObject({ ok: false, decided_by: 'code', note });
+    expect(lines[1].text).toBe(`[test] check_bay -> no (registry decides); camera says yes: Itokawa is in the gripper. ${note}`);
   });
 });
 
