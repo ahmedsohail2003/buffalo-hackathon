@@ -158,7 +158,49 @@ describe('Live config', () => {
     expect(await fetchLiveToken(cfg, fetchFn)).toEqual({ name: 'auth_tokens/t1', apiVersion: 'v1alpha' });
     expect(seen[0]).toEqual({ url: '/api/gemini/live-token', body: { model: 'gemini-3.8-live', config: cfg } });
     const failing = (async () => new Response(JSON.stringify({ error: 'gemini_unconfigured', message: 'Gemini is not configured.' }), { status: 503 })) as unknown as typeof fetch;
-    await expect(fetchLiveToken(cfg, failing)).rejects.toThrow('Gemini is not configured.');
+    await expect(fetchLiveToken(cfg, failing)).rejects.toThrow('Voice is not available: the server has no Gemini key.');
+  });
+});
+
+describe('Voice token failures in plain words', () => {
+  const reply = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    (async () => new Response(JSON.stringify(body), { status, headers })) as unknown as typeof fetch;
+
+  it('maps the server codes to sentences and keeps retry_after_s', async () => {
+    const cfg = buildLiveConfig();
+    const busy = fetchLiveToken(cfg, reply(429, { error: 'rate_limited', retry_after_s: 7 }, { 'retry-after': '7' }));
+    await expect(busy).rejects.toThrow('Voice is busy: try again in 7 s.');
+    await expect(busy).rejects.toMatchObject({ code: 'rate_limited', retryAfterS: 7 });
+    await expect(fetchLiveToken(cfg, reply(502, { error: 'token_mint_failed', detail: 'upstream said no' }))).rejects.toThrow('The server could not get a voice token.');
+    await expect(fetchLiveToken(cfg, reply(429, { error: 'budget_exhausted', upstream: 'gemini', retry_after_s: 2400 }))).rejects.toThrow(
+      'The server has used its Gemini allowance for now: try again in 40 min.',
+    );
+    await expect(fetchLiveToken(cfg, reply(403, { error: 'model_not_allowed', model: 'x' }))).rejects.toThrow('The server does not allow this voice model.');
+    await expect(fetchLiveToken(cfg, reply(429, {}, { 'retry-after': '12' }))).rejects.toMatchObject({ message: 'The voice token request failed (HTTP 429).', retryAfterS: 12 });
+    const offline = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+    await expect(fetchLiveToken(cfg, offline)).rejects.toThrow('Could not reach the voice server.');
+  });
+
+  it('Connect shows the sentence, not the raw code', async () => {
+    const states: string[] = [];
+    const lines: string[] = [];
+    const live = new LiveVoice({
+      bay: makeFakeBay(),
+      sink: { log: (l) => void lines.push(l.text), ledger: () => {} },
+      connector: async (config, _cb, signal) => {
+        await fetchLiveToken(config, reply(429, { error: 'rate_limited', retry_after_s: 7 }), undefined, signal);
+        throw new Error('this test never opens a socket');
+      },
+      mic: { start: async () => {}, stop() {} },
+      player: { play() {}, stop() {}, resume: async () => {}, setMuted() {} },
+      recordEntry: () => {},
+    });
+    live.events = { onState: (s, d) => void states.push(d ? `${s}: ${d}` : s) };
+    await live.connect();
+    expect(states).toEqual(['connecting', 'error: Voice is busy: try again in 7 s.']);
+    expect(lines).toEqual(['Voice is busy: try again in 7 s.']);
   });
 });
 

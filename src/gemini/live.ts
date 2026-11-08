@@ -164,6 +164,45 @@ export interface LiveToken {
   expireTime?: string;
 }
 
+interface TokenReply {
+  name?: unknown;
+  apiVersion?: unknown;
+  expireTime?: unknown;
+  message?: unknown;
+  error?: unknown;
+  retry_after_s?: unknown;
+}
+
+/** "7 s", "3 min", "2 h": how long to wait, for a sentence. */
+function waitText(s: number): string {
+  if (s < 120) return `${s} s`;
+  if (s < 7200) return `${Math.round(s / 60)} min`;
+  return `${Math.round(s / 3600)} h`;
+}
+
+/** The token server's error codes as plain sentences; retry_after_s (or Retry-After) is kept. */
+function tokenFailure(status: number, ok: boolean, body: TokenReply, retryAfter: string | null): LiveLinkError {
+  const code = typeof body.error === 'string' && body.error ? body.error : ok ? 'no_token' : `http_${status}`;
+  const fromBody = typeof body.retry_after_s === 'number' && Number.isFinite(body.retry_after_s) ? body.retry_after_s : NaN;
+  const fromHeader = retryAfter && /^\s*\d+\s*$/.test(retryAfter) ? Number(retryAfter) : NaN;
+  const wait = Number.isFinite(fromBody) ? fromBody : fromHeader;
+  const retryAfterS = Number.isFinite(wait) ? Math.max(1, Math.ceil(wait)) : undefined;
+  const later = retryAfterS ? `try again in ${waitText(retryAfterS)}` : 'try again in a moment';
+  const sentences: Record<string, string> = {
+    rate_limited: `Voice is busy: ${later}.`,
+    budget_exhausted: `The server has used its Gemini allowance for now: ${later}.`,
+    token_mint_failed: 'The server could not get a voice token.',
+    gemini_unconfigured: 'Voice is not available: the server has no Gemini key.',
+    model_not_allowed: 'The server does not allow this voice model.',
+    audio_only: 'The server refused the voice settings.',
+    origin_not_allowed: 'The server does not take voice requests from this page.',
+    no_token: 'The server sent no voice token.',
+  };
+  const message = typeof body.message === 'string' ? body.message.trim() : '';
+  const text = Object.hasOwn(sentences, code) ? sentences[code] : message || `The voice token request failed (HTTP ${status}).`;
+  return new LiveLinkError(text, code, retryAfterS);
+}
+
 /** POST the config to the server, which checks the model and mints a single-use token for it. */
 export async function fetchLiveToken(
   config: Record<string, unknown>,
@@ -171,16 +210,20 @@ export async function fetchLiveToken(
   url = '/api/gemini/live-token',
   signal?: AbortSignal,
 ): Promise<LiveToken> {
-  const res = await fetchFn(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: LIVE, config }),
-    ...(signal ? { signal } : {}),
-  });
-  const body = (await res.json().catch(() => ({}))) as { name?: unknown; apiVersion?: unknown; expireTime?: unknown; message?: unknown; error?: unknown };
-  if (!res.ok || typeof body.name !== 'string') {
-    throw new Error(String(body.message ?? body.error ?? `token request failed (HTTP ${res.status})`));
+  let res: Response;
+  try {
+    res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: LIVE, config }),
+      ...(signal ? { signal } : {}),
+    });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    throw new LiveLinkError('Could not reach the voice server.', 'unreachable');
   }
+  const body = (await res.json().catch(() => ({}))) as TokenReply;
+  if (!res.ok || typeof body.name !== 'string') throw tokenFailure(res.status, res.ok, body, res.headers.get('retry-after'));
   return {
     name: body.name,
     apiVersion: typeof body.apiVersion === 'string' ? body.apiVersion : 'v1alpha',
