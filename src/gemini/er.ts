@@ -192,13 +192,22 @@ export function readPoints(json: unknown): RawPoint[] {
   return out;
 }
 
-const STOP_WORDS = new Set(['the', 'a', 'an', 'of', 'sample', 'samples', 'piece', 'one', 'that', 'this', 'on', 'in', 'is', 'it', 'to', 'at']);
+/** Words that never single out a sample: small words, and words the presets and NASA models share. */
+const GENERIC_WORDS = new Set([
+  'the', 'a', 'an', 'of', 'one', 'that', 'this', 'on', 'in', 'is', 'it', 'to', 'at',
+  'sample', 'samples', 'model', 'models', 'shape', 'shapes', 'nasa', 'jaxa', 'fragment', 'fragments', 'piece', 'pieces',
+]);
 
 function words(s: string): string[] {
   return s
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((w) => w && !STOP_WORDS.has(w));
+    .filter((w) => w && !GENERIC_WORDS.has(w));
+}
+
+/** The words that name a sample: its name without parenthetical text and generic words. */
+export function distinctiveWords(name: string): string[] {
+  return [...new Set(words(name.replace(/\([^)]*\)/g, ' ')))];
 }
 
 function idMentioned(id: string, text: string): boolean {
@@ -206,32 +215,39 @@ function idMentioned(id: string, text: string): boolean {
   return new RegExp(`(^|[^a-z0-9_-])${esc}($|[^a-z0-9_-])`).test(text.toLowerCase());
 }
 
-/** How well a label names a sample: 1 for its id, else the share of its name's words present. */
+/** How well a label names a sample: 1 for its id, else the share of its distinctive words present. */
 export function nameScore(s: Sample, label: string): number {
   if (idMentioned(s.id, label)) return 1;
-  const nameWords = words(s.name);
-  if (!nameWords.length) return 0;
-  const labelWords = new Set(words(label));
-  return nameWords.filter((w) => labelWords.has(w)).length / nameWords.length;
+  const own = distinctiveWords(s.name);
+  if (!own.length) return 0;
+  const said = new Set(words(label));
+  return own.filter((w) => said.has(w)).length / own.length;
 }
 
-/** The registry sample a label refers to (id, or at least half of its name's words), if any. */
-export function matchSample(samples: Sample[], label: string): Sample | undefined {
-  let best: Sample | undefined;
-  let bestScore = 0;
-  for (const s of samples) {
-    const score = nameScore(s, label);
-    if (score > bestScore) {
-      best = s;
-      bestScore = score;
-    }
-  }
-  return bestScore >= 0.5 ? best : undefined;
-}
-
-/** Every registry sample the text mentions. */
+/**
+ * Every registry sample the text refers to. An id in the text selects its sample; so does a word
+ * that is a distinctive word of exactly one sample. A word several samples share ("bennu" with two
+ * Bennu samples on the deck) adds all of them, unless one of them is already selected.
+ */
 export function mentionedSamples(samples: Sample[], text: string): Sample[] {
-  return samples.filter((s) => nameScore(s, text) >= 0.5);
+  const picked = new Set(samples.filter((s) => idMentioned(s.id, text)));
+  const said = new Set(words(text));
+  const owners = new Map<string, Sample[]>();
+  for (const s of samples) {
+    for (const w of distinctiveWords(s.name)) if (said.has(w)) owners.set(w, [...(owners.get(w) ?? []), s]);
+  }
+  for (const own of owners.values()) if (own.length === 1) picked.add(own[0]);
+  const shared = new Set<Sample>();
+  for (const own of owners.values()) {
+    if (own.length > 1 && !own.some((s) => picked.has(s))) for (const s of own) shared.add(s);
+  }
+  return samples.filter((s) => picked.has(s) || shared.has(s));
+}
+
+/** The one registry sample a label refers to; undefined when it names none, or several (ambiguous). */
+export function matchSample(samples: Sample[], label: string): Sample | undefined {
+  const m = mentionedSamples(samples, label);
+  return m.length === 1 ? m[0] : undefined;
 }
 
 /** Where the camera pointed vs where the registry says the sample is. */
@@ -247,11 +263,11 @@ export function compareToRegistry(bay: BayApi, sample: Sample, yx: [number, numb
   };
 }
 
-/** Pure part of point_at: pick the point, unproject it, match it to the registry. */
-export function localize(bay: BayApi, label: string, points: RawPoint[]): PointResult {
+/** Pure part of point_at: pick the point, unproject it, match it to the registry (sampleId, when given, is the target). */
+export function localize(bay: BayApi, label: string, points: RawPoint[], sampleId?: string): PointResult {
   if (!points.length) return { ok: false, label, points, reason: `The bay camera cannot see ${label}.` };
   const samples = bay.samples.list();
-  const target = matchSample(samples, label);
+  const target = (sampleId ? samples.find((s) => s.id === sampleId) : undefined) ?? matchSample(samples, label);
   // Several points: prefer the one whose own label names the target best.
   const best = target && points.length > 1 ? [...points].sort((a, b) => nameScore(target, b.label) - nameScore(target, a.label))[0] : points[0];
   const z = target ? target.pos[2] : DEFAULT_PLANE_Z;
@@ -279,14 +295,14 @@ export function localize(bay: BayApi, label: string, points: RawPoint[]): PointR
   };
 }
 
-export async function pointAt(bay: BayApi, label: string, deps: ErDeps = {}): Promise<PointResult> {
+export async function pointAt(bay: BayApi, label: string, deps: ErDeps = {}, sampleId?: string): Promise<PointResult> {
   const prompt =
     `Point to ${label} in the image. ` +
     'The answer should follow the JSON format: [{"point": [y, x], "label": "<what it is>"}]. ' +
     'The points are in [y, x] format normalized to 0-1000. Return at most 3 points, best first. ' +
     'If it is not visible, return [].';
   const ans = await askEr(bay, 'point', prompt, POINT_SCHEMA, deps);
-  return { ...localize(bay, label, readPoints(ans.json)), schema: ans.schemaUsed };
+  return { ...localize(bay, label, readPoints(ans.json), sampleId), schema: ans.schemaUsed };
 }
 
 // ---- Verification ---------------------------------------------------------------------------
@@ -314,8 +330,8 @@ function registryAnswer(question: string, mentioned: Sample[], deps: ErDeps): bo
   return deps.inContainment(mentioned[0]);
 }
 
-/** Ask the bay-camera model a yes/no question about a fresh frame. */
-export async function verifyQuestion(bay: BayApi, question: string, deps: ErDeps = {}): Promise<VerifyResult> {
+/** Ask the bay-camera model a yes/no question about a fresh frame. sampleId, when given, is the sample it is about. */
+export async function verifyQuestion(bay: BayApi, question: string, deps: ErDeps = {}, sampleId?: string): Promise<VerifyResult> {
   const prompt =
     'You are the inspection camera of an orbital sample-curation bay: a light deck with a 1 cm grid, ' +
     'a containment bin and small samples. Answer using only what is visible in this image.\n' +
@@ -325,7 +341,9 @@ export async function verifyQuestion(bay: BayApi, question: string, deps: ErDeps
   const o = (ans.json && typeof ans.json === 'object' ? ans.json : {}) as Record<string, unknown>;
   const answer = readAnswer(o.answer);
   const observation = String(o.observation ?? (ans.json === null ? ans.text : '')).slice(0, 240).trim();
-  const mentioned = mentionedSamples(bay.samples.list(), question);
+  const samples = bay.samples.list();
+  const chosen = sampleId ? samples.find((s) => s.id === sampleId) : undefined;
+  const mentioned = chosen ? [chosen] : mentionedSamples(samples, question);
   const code = registryAnswer(question, mentioned, deps);
   const camera = answer === 'yes' ? true : answer === 'no' ? false : undefined;
   return {

@@ -4,9 +4,10 @@
 // read-only tools always answer. Every call is a log line.
 // No DOM at import time.
 import type { BayApi, MoveResult, Placement, Sample } from '../contracts';
+import { HOME_Q } from '../core/constants';
 import { BAY_FACTS, BAY_FRAME_TEXT, defaultInContainment } from './bayFacts';
 import { errorText, generateJson as defaultGenerateJson, type CallFn } from './client';
-import { pointAt, verifyQuestion } from './er';
+import { matchSample, mentionedSamples, pointAt, verifyQuestion } from './er';
 import { logTo, type FabricateFn, type FabricatorDeps, type LogSink } from './types';
 
 export type ToolName =
@@ -72,11 +73,17 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'place_sample',
     description:
-      `Put the held sample down on the deck at x_mm, y_mm. ${BAY_FRAME_TEXT} Reachable: ${BAY_FACTS.reach.minMm} to ${BAY_FACTS.reach.maxMm} mm from the base, within ${BAY_FACTS.reach.bearingDeg} degrees of straight ahead. Code checks reach and spacing and may refuse.`,
+      `Put the held sample down on the deck. Easiest: give side (left, right, front, behind or center of the deck) and code chooses a free, checked spot there. Or give relative_to (a sample id, "containment" or "arm") with a direction and optional distance_mm; or nothing, for any free spot. Exact x_mm and y_mm also work; if code refuses that spot, the result suggests the nearest free one. ${BAY_FRAME_TEXT} Reachable: ${BAY_FACTS.reach.minMm} to ${BAY_FACTS.reach.maxMm} mm from the base, within ${BAY_FACTS.reach.bearingDeg} degrees of straight ahead. Parts need ${BAY_FACTS.spacingMinMm} mm or more between centres and must keep clear of the containment bin. Code checks reach and spacing and may refuse.`,
     parameters: {
       type: 'OBJECT',
-      properties: { x_mm: MM('deck x in mm'), y_mm: MM('deck y in mm') },
-      required: ['x_mm', 'y_mm'],
+      properties: {
+        side: { type: 'STRING', enum: ['left', 'right', 'front', 'behind', 'center'], description: 'part of the deck; code picks a free spot there' },
+        relative_to: { type: 'STRING', description: 'a sample id, "containment" or "arm"' },
+        direction: { type: 'STRING', enum: ['left', 'right', 'front', 'behind'] },
+        distance_mm: MM('distance from relative_to in mm'),
+        x_mm: MM('deck x in mm'),
+        y_mm: MM('deck y in mm'),
+      },
     },
   },
   {
@@ -107,14 +114,28 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'check_bay',
     description:
-      'Ask the fixed bay camera (Gemini Robotics-ER) a yes/no question about what it sees now, for example "Is the Bennu fragment inside the containment bin?". Where the registry can answer, the registry decides and the result says whether the camera agrees. Read-only; always available.',
-    parameters: { type: 'OBJECT', properties: { question: { type: 'STRING' } }, required: ['question'] },
+      'Ask the fixed bay camera (Gemini Robotics-ER) a yes/no question about what it sees now, for example "Is Itokawa inside the containment bin?". When the question is about one sample, also give its sample_id. Where the registry can answer, the registry decides and the result says whether the camera agrees. Read-only; always available.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        question: { type: 'STRING' },
+        sample_id: { type: 'STRING', description: 'optional: id of the sample the question is about, for example "sample_3"' },
+      },
+      required: ['question'],
+    },
   },
   {
     name: 'point_at',
     description:
-      'Find something on the bay camera image (Gemini Robotics-ER pointing) and compare it with the registry: returns the deck position in mm and the localization error in mm. Read-only; always available.',
-    parameters: { type: 'OBJECT', properties: { label: { type: 'STRING', description: 'what to find, for example "the Itokawa sample"' } }, required: ['label'] },
+      'Find something on the bay camera image (Gemini Robotics-ER pointing) and compare it with the registry: returns the deck position in mm and the localization error in mm. When it is a sample, also give its sample_id. Read-only; always available.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        label: { type: 'STRING', description: 'what to find, for example "the Itokawa sample"' },
+        sample_id: { type: 'STRING', description: 'optional: id of the sample to find, for example "sample_3"' },
+      },
+      required: ['label'],
+    },
   },
 ];
 
@@ -263,9 +284,34 @@ function badArgs(reason: string): ToolResult {
   return { ok: false, code: 'BAD_ARGS', reason };
 }
 
+/** A refusal as a tool result; the suggestion (for example the nearest free spot) passes through. */
+function asRefusal(r: { code: string; reason: string; suggestion?: string }): ToolResult {
+  return { ok: false, code: r.code, reason: r.reason, ...(r.suggestion ? { suggestion: r.suggestion } : {}) };
+}
+
 function fromMove(r: MoveResult, extra: Record<string, unknown> = {}): ToolResult {
   if (r.ok) return { ok: true, holding: r.held, tcp_mm: r.tcp_mm.map((v) => Math.round(v)), ...extra };
-  return { ok: false, code: r.code, reason: r.reason };
+  return asRefusal(r);
+}
+
+const DIRECTIONS: ReadonlySet<string> = new Set(['left', 'right', 'front', 'behind']);
+const SIDES: ReadonlySet<string> = new Set(['left', 'right', 'front', 'behind', 'center']);
+
+/** The relative placement arguments design_sample and place_sample share. */
+function relativePlacement(a: Record<string, unknown>): Placement {
+  const p: Placement = {};
+  const rel = str(a, 'relative_to');
+  const dir = str(a, 'direction');
+  const dist = num(a, 'distance_mm');
+  if (rel) p.relative_to = rel;
+  if (dir && DIRECTIONS.has(dir)) p.direction = dir as Placement['direction'];
+  if (dist !== undefined) p.distance_mm = dist;
+  return p;
+}
+
+/** true when the argument was given at all (null counts as left out) */
+function given(a: Record<string, unknown>, k: string): boolean {
+  return a[k] !== undefined && a[k] !== null;
 }
 
 /** A sample by id, or by a unique name match (models sometimes pass the name). */
@@ -277,7 +323,52 @@ function resolveSample(bay: BayApi, ref: string): Sample | undefined {
   return named.length === 1 ? named[0] : undefined;
 }
 
-async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c: ToolContext): Promise<ToolResult> {
+function noSuchSample(bay: BayApi, ref: string): ToolResult {
+  const ids = bay.samples.list().map((x) => x.id);
+  return { ok: false, code: 'NO_SAMPLE', reason: `There is no sample ${ref}.${ids.length ? ` Samples on deck: ${ids.join(', ')}.` : ' The deck is empty.'}` };
+}
+
+/** The sample a sample_id argument names (an id, a name, or a word only its name has); a refusal if none. */
+function chosenSample(bay: BayApi, a: Record<string, unknown>): { sample?: Sample; refusal?: ToolResult } {
+  const ref = str(a, 'sample_id');
+  if (!ref) return {};
+  const sample = resolveSample(bay, ref) ?? matchSample(bay.samples.list(), ref);
+  return sample ? { sample } : { refusal: noSuchSample(bay, ref) };
+}
+
+/** How close (xy, mm) the gripper may be to the bin centre or to the sample a camera check is about. */
+export const CAMERA_CLEAR_MM = 70;
+/** A question or label about containment. */
+const ABOUT_BIN = /\b(contain\w*|bin|tray)\b/i;
+
+/**
+ * Before a camera check: an open gripper parked over the bin or the sample looks, on camera, as if it
+ * held the sample. When the bay is RUNNING and the arm is idle and empty, with its TCP within
+ * CAMERA_CLEAR_MM (xy) of the bin centre (a question about containment) or of a sample in question,
+ * move it home first. Never in another bay state and never while holding: then the result carries a
+ * note that the gripper may hide the sample.
+ */
+async function clearCameraView(bay: BayApi, text: string, about: Sample[], c: ToolContext, source: ToolSource): Promise<string | undefined> {
+  const arm = bay.arm.snapshot();
+  const near = (x: number, y: number) => Math.hypot(arm.tcp[0] - x, arm.tcp[1] - y) * 1000 <= CAMERA_CLEAR_MM;
+  const bin = c.containmentMm ?? BAY_FACTS.containmentMm;
+  if (!(ABOUT_BIN.test(text) && near(bin[0] / 1000, bin[1] / 1000)) && !about.some((s) => near(s.pos[0], s.pos[1]))) return undefined;
+  if (arm.heldId) {
+    const held = bay.samples.get(arm.heldId);
+    return `The gripper is holding ${held?.name ?? arm.heldId}, so it may hide the sample from the camera.`;
+  }
+  if (bay.gate.state() !== 'RUNNING' || arm.busy || atHome(arm.q)) return undefined;
+  logTo(c.sink, 'gemini', `[${source}] moving the arm clear of the camera first`);
+  await bay.arm.home();
+  return undefined;
+}
+
+/** Already in the home pose (joints 0-4 within about a degree): its TCP is close to two seed slots, but it hides nothing. */
+function atHome(q: number[]): boolean {
+  return HOME_Q.slice(0, 5).every((h, j) => Math.abs((q[j] ?? Number.NaN) - h) < 0.02);
+}
+
+async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c: ToolContext, source: ToolSource): Promise<ToolResult> {
   switch (name) {
     case 'describe_bay':
       return describeBay(bay, c.containmentMm);
@@ -286,12 +377,22 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
     case 'check_bay': {
       const question = str(a, 'question');
       if (!question) return badArgs('check_bay needs a question.');
-      return { ...(await verifyQuestion(bay, question.slice(0, 300), { call: c.call, inContainment: c.inContainment, signal: c.signal })) };
+      const { sample, refusal } = chosenSample(bay, a);
+      if (refusal) return refusal;
+      const q = question.slice(0, 300);
+      const note = await clearCameraView(bay, q, sample ? [sample] : mentionedSamples(bay.samples.list(), q), c, source);
+      const r = await verifyQuestion(bay, q, { call: c.call, inContainment: c.inContainment, signal: c.signal }, sample?.id);
+      return { ...r, ...(note ? { note } : {}) };
     }
     case 'point_at': {
       const label = str(a, 'label');
       if (!label) return badArgs('point_at needs a label.');
-      return { ...(await pointAt(bay, label.slice(0, 120), { call: c.call, signal: c.signal })) };
+      const { sample, refusal } = chosenSample(bay, a);
+      if (refusal) return refusal;
+      const l = label.slice(0, 120);
+      const note = await clearCameraView(bay, l, sample ? [sample] : mentionedSamples(bay.samples.list(), l), c, source);
+      const r = await pointAt(bay, l, { call: c.call, signal: c.signal }, sample?.id);
+      return { ...r, ...(note ? { note } : {}) };
     }
   }
 
@@ -303,19 +404,34 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
       const ref = str(a, 'id');
       if (!ref) return badArgs('pick_sample needs a sample id.');
       const s = resolveSample(bay, ref);
-      if (!s) {
-        const ids = bay.samples.list().map((x) => x.id);
-        return { ok: false, code: 'NO_SAMPLE', reason: `There is no sample ${ref}.${ids.length ? ` Samples on deck: ${ids.join(', ')}.` : ' The deck is empty.'}` };
-      }
+      if (!s) return noSuchSample(bay, ref);
       return fromMove(await bay.arm.pick(s.id), { sample: s.id, name: s.name });
     }
     case 'place_sample': {
-      const x = num(a, 'x_mm');
-      const y = num(a, 'y_mm');
-      if (x === undefined || y === undefined) return badArgs('place_sample needs x_mm and y_mm.');
       const heldId = bay.arm.snapshot().heldId;
-      const r = await bay.arm.placeAt([x / 1000, y / 1000]);
-      return fromMove(r, { sample: heldId, placed_mm: [Math.round(x), Math.round(y)] });
+      if (given(a, 'x_mm') || given(a, 'y_mm')) {
+        // an exact spot: the arm checks it; a refusal names the nearest free spot
+        const x = num(a, 'x_mm');
+        const y = num(a, 'y_mm');
+        if (x === undefined || y === undefined) return badArgs('place_sample needs both x_mm and y_mm as numbers, or neither (then give side, or relative_to and direction).');
+        const r = await bay.arm.placeAt([x / 1000, y / 1000]);
+        return fromMove(r, { sample: heldId, placed_mm: [Math.round(x), Math.round(y)] });
+      }
+      const placement = relativePlacement(a);
+      const side = str(a, 'side');
+      if (side !== undefined && !SIDES.has(side)) return badArgs('side must be left, right, front, behind or center.');
+      if (side) placement.side = side as Placement['side'];
+      // a direction with nothing to be relative to means that side of the deck
+      if (!placement.relative_to && !placement.side && placement.direction) {
+        placement.side = placement.direction;
+        delete placement.direction;
+      }
+      if (!heldId) return { ok: false, code: 'NOTHING_HELD', reason: 'The gripper is not holding anything to place.' };
+      // code chooses the spot: free, reachable, spaced and clear of the bin
+      const spot = bay.samples.findSpot(heldId, placement);
+      if (!spot.ok) return asRefusal(spot);
+      const r = await bay.arm.placeAt(spot.xy);
+      return fromMove(r, { sample: heldId, placed_mm: [Math.round(spot.xy[0] * 1000), Math.round(spot.xy[1] * 1000)] });
     }
     case 'place_in_containment': {
       const heldId = bay.arm.snapshot().heldId;
@@ -330,17 +446,11 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
       const description = str(a, 'description');
       if (!description) return badArgs('design_sample needs a description.');
       if (!c.fabricate) return { ...FABRICATOR_OFFLINE };
-      const placement: Placement = {};
+      const placement = relativePlacement(a);
       const x = num(a, 'x_mm');
       const y = num(a, 'y_mm');
-      const dist = num(a, 'distance_mm');
-      const rel = str(a, 'relative_to');
-      const dir = str(a, 'direction');
       if (x !== undefined) placement.x_mm = x;
       if (y !== undefined) placement.y_mm = y;
-      if (rel) placement.relative_to = rel;
-      if (dir === 'left' || dir === 'right' || dir === 'front' || dir === 'behind') placement.direction = dir;
-      if (dist !== undefined) placement.distance_mm = dist;
       const r = await c.fabricate(
         bay,
         description.slice(0, 300),
@@ -372,7 +482,7 @@ export async function dispatchTool(
   logTo(c.sink, 'gemini', `[${source}] ${name}(${formatArgs(a)})`);
   let result: ToolResult;
   try {
-    result = await runTool(bay, name, a, c);
+    result = await runTool(bay, name, a, c, source);
   } catch (err) {
     result = { ok: false, code: 'TOOL_ERROR', reason: `${name} failed: ${errorText(err)}`.slice(0, 220) };
   }
@@ -386,14 +496,39 @@ export function formatArgs(a: Record<string, unknown>): string {
     .join(', ');
 }
 
-/** One short line for the log, the chat and the Live [BAY EVENT] messages. */
+/**
+ * check_bay leads with the decision, then the camera: "yes (registry decides); camera says no: <observation>",
+ * or "no (camera decides): <observation>" when only the camera could answer.
+ */
+function checkBaySummary(r: ToolResult): string {
+  const answer = String(r.answer);
+  const obs = String(r.observation ?? '').trim();
+  const head =
+    r.decided_by === 'code'
+      ? `${r.ok ? 'yes' : 'no'} (registry decides); ${answer === 'unsure' ? 'camera is unsure' : `camera says ${answer}`}`
+      : `${answer} (camera decides)`;
+  return obs ? `${head}: ${obs}` : head;
+}
+
+/** text that ends in exactly one full stop (or the ? or ! it already has) */
+export function sentence(s: string): string {
+  const t = s.trim();
+  return !t || /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
+/** One short line for the log, the chat and the Live [BAY EVENT] messages (a camera check's note included). */
 export function summarizeResult(name: string, r: ToolResult): string {
+  const line = summaryLine(name, r);
+  return (name === 'check_bay' || name === 'point_at') && typeof r.note === 'string' ? `${sentence(line)} ${r.note}` : line;
+}
+
+function summaryLine(name: string, r: ToolResult): string {
   if (!r.ok) {
     const reason = typeof r.reason === 'string' ? r.reason : 'refused';
-    if (name === 'check_bay' && 'answer' in r) {
-      return `${String(r.answer)}${r.decided_by === 'code' ? ' (registry decides: no)' : ''}${r.agree === false ? ' - camera disagrees' : ''}: ${String(r.observation ?? '')}`.trim();
-    }
+    if (name === 'check_bay' && 'answer' in r) return checkBaySummary(r);
     if (name === 'point_at' && !('code' in r)) return `not found: ${reason}`;
+    const tip = typeof r.suggestion === 'string' ? r.suggestion.trim() : '';
+    if (tip) return `refused (${String(r.code ?? 'ERROR')}): ${sentence(reason)} ${sentence(tip[0].toUpperCase() + tip.slice(1))}`;
     return `refused (${String(r.code ?? 'ERROR')}): ${reason}`;
   }
   switch (name) {
@@ -418,7 +553,7 @@ export function summarizeResult(name: string, r: ToolResult): string {
       return s ? `ok, ${s.name} (${s.id}): grip ${s.grip_width_mm} mm, height ${s.height_mm} mm${s.mass_g !== undefined ? `, ${s.mass_g} g` : ''}` : 'ok';
     }
     case 'check_bay':
-      return `${String(r.answer)}${r.decided_by === 'code' ? ' (registry decides)' : ''}${r.agree === false ? ' - camera disagrees' : ''}: ${String(r.observation ?? '')}`.trim();
+      return checkBaySummary(r);
     case 'point_at': {
       const m = r.match as { name: string; error_mm: number | null } | undefined;
       const p = r.bay_mm as number[] | null | undefined;

@@ -6,7 +6,7 @@ import type { BayApi } from '../contracts';
 import { GeminiError, callGemini, errorText, type CallFn, type Content, type Part } from './client';
 import { BAY_FACTS_TEXT } from './bayFacts';
 import { FLASH, type ThinkingLevel } from './models';
-import { TOOL_DECLARATIONS, describeBay, dispatchTool, summarizeResult, type ToolContext, type ToolResult } from './tools';
+import { TOOL_DECLARATIONS, describeBay, dispatchTool, sentence, summarizeResult, type ToolContext, type ToolResult } from './tools';
 import { logTo, type LogSink } from './types';
 
 export const COWORKER_PROMPT = [
@@ -17,7 +17,7 @@ export const COWORKER_PROMPT = [
   'Rules:',
   '1. Never say an action worked unless its tool result in this turn says ok: true. When a tool refuses, give its reason in one sentence and the next step if there is one.',
   '2. You cannot stop, resume, slow or reset the bay. The operator owns safety: an open palm stops the arm, a held fist is an emergency stop, and the panel has the same controls. If asked to stop, tell the operator to use them.',
-  '3. While the bay is STOPPED or ESTOPPED, do not try to move. While it is IDLE, the arm only moves after the operator starts the cycle (Victory sign or CYCLE START): ask them to, and do not retry the move until the bay is RUNNING. Read-only tools still work.',
+  '3. While the bay is STOPPED or ESTOPPED, do not try to move. While it is IDLE, the arm only moves after the operator starts the cycle: tell them to give the cycle start (Victory sign or CYCLE START), then send the request again. Never promise to act later. Read-only tools still work.',
   '4. Use sample ids from the snapshot or describe_bay. If the target is ambiguous, ask one short question.',
   '5. After a pick or a place you may call check_bay once to confirm on camera. Gemini sees, code decides: if the camera and the registry disagree, trust the registry and say that they disagree.',
   '6. design_sample asks the fabricator for a new sample. Code measures it and may scale or refuse it. Report what code measured, not what was asked for.',
@@ -171,10 +171,10 @@ export class Coworker {
 
     const last = traces[traces.length - 1];
     if (!finalText) {
-      if (stopped === 'max_rounds') finalText = `Step limit reached after ${maxRounds} rounds.${last ? ` Last result: ${last.summary}.` : ''}`;
+      if (stopped === 'max_rounds') finalText = this.stepLimitReply(last, maxRounds);
       else if (stopped === 'aborted') finalText = this.abortReason || 'Request cancelled.';
-      else if (stopped === 'error') finalText = `Gemini is not answering: ${error}.${last ? ` Last result: ${last.summary}.` : ''}`;
-      else finalText = last ? `Last result: ${last.summary}.` : 'No reply from Gemini.';
+      else if (stopped === 'error') finalText = `Gemini is not answering: ${sentence(error ?? 'no reason given')}${last ? ` Last result: ${sentence(last.summary)}` : ''}`;
+      else finalText = last ? `Last result: ${sentence(last.summary)}` : 'No reply from Gemini.';
     }
 
     if (stopped !== 'aborted' && stopped !== 'error') {
@@ -191,4 +191,24 @@ export class Coworker {
     delete d.frame;
     return JSON.stringify(d);
   }
+
+  /**
+   * CAPCOM's reply when the step limit ends a request: "I could not finish: <short reason>. <what is
+   * in the gripper>." The reason is the first clause of the last refusal, else the step count.
+   */
+  private stepLimitReply(last: ToolTrace | undefined, maxRounds: number): string {
+    const refused = last && !last.result.ok && typeof last.result.reason === 'string' ? firstClause(last.result.reason) : '';
+    const why = refused || `the request needed more than ${maxRounds} steps`;
+    const heldId = this.bay.arm.snapshot().heldId;
+    const held = heldId ? ` ${this.bay.samples.get(heldId)?.name ?? heldId} is still in the gripper.` : '';
+    return `I could not finish: ${why}.${held}`;
+  }
+}
+
+/** The first clause of a reason ("that spot overlaps Itokawa by 24 mm; put it ..."), without closing punctuation. */
+function firstClause(reason: string): string {
+  return reason
+    .split(/;|\.\s/)[0]
+    .trim()
+    .replace(/[\s.,;:!?]+$/, '');
 }

@@ -65,14 +65,30 @@ describe('coworker loop', () => {
     expect(reply.text).toContain('stopped');
   });
 
-  it(`stops after ${MAX_ROUNDS} model rounds and reports the last tool result`, async () => {
+  it(`stops after ${MAX_ROUNDS} model rounds and says so as CAPCOM`, async () => {
     const bay = makeFakeBay({ samples: [bennu] });
     const loop = Array.from({ length: 10 }, () => ({ calls: [{ name: 'bay_status', args: {} }] }));
     const { call, requests } = fakeModel(loop);
     const reply = await new Coworker(bay, { call }).ask('status, forever');
     expect(requests).toHaveLength(MAX_ROUNDS);
     expect(reply.stopped).toBe('max_rounds');
-    expect(reply.text).toBe(`Step limit reached after ${MAX_ROUNDS} rounds. Last result: bay RUNNING, arm idle, holding nothing.`);
+    expect(reply.text).toBe(`I could not finish: the request needed more than ${MAX_ROUNDS} steps.`);
+  });
+
+  it('at the step limit after refused places: the short reason and what is still in the gripper, no doubled punctuation', async () => {
+    const bennuSeed = makeSample({ id: 'sample_2', name: 'Bennu (NASA shape model)', pos: [0.056, -0.155, 0.015] });
+    const bay = makeFakeBay({ samples: [bennuSeed] });
+    bay.arm.placeAt = async () => ({
+      ok: false,
+      code: 'UNREACHABLE',
+      reason: 'that spot overlaps Itokawa (NASA/JAXA shape model) by 24 mm; put it right on top or at least 44 mm away from its centre.',
+    });
+    const places = Array.from({ length: MAX_ROUNDS }, (_, i) => ({ calls: [{ name: 'place_sample', args: { x_mm: -70 + i, y_mm: -165 } }] }));
+    const { call } = fakeModel([{ calls: [{ name: 'pick_sample', args: { id: 'sample_2' } }] }, ...places]);
+    const reply = await new Coworker(bay, { call }).ask('Place Bennu on the left side of the deck.');
+    expect(reply.stopped).toBe('max_rounds');
+    expect(reply.text).toBe('I could not finish: that spot overlaps Itokawa (NASA/JAXA shape model) by 24 mm. Bennu (NASA shape model) is still in the gripper.');
+    expect(reply.text).not.toMatch(/[.!?]{2}/);
   });
 
   it('keeps a short text-only history between requests', async () => {
@@ -104,6 +120,13 @@ describe('coworker loop', () => {
     expect(cw.busy).toBe(false);
   });
 
+  it('while IDLE, the prompt has CAPCOM ask for the cycle start and the request again, never promise a later action', () => {
+    const rule3 = COWORKER_PROMPT.split('\n').find((l) => l.startsWith('3. '));
+    expect(rule3).toContain('tell them to give the cycle start (Victory sign or CYCLE START), then send the request again');
+    expect(rule3).toContain('Never promise to act later.');
+    expect(COWORKER_PROMPT).not.toMatch(/until the bay is RUNNING/);
+  });
+
   it('reports a Gemini failure plainly', async () => {
     const bay = makeFakeBay({ samples: [bennu] });
     const call: CallFn = async () => {
@@ -111,5 +134,9 @@ describe('coworker loop', () => {
     };
     const reply = await new Coworker(bay, { call }).ask('status');
     expect(reply).toMatchObject({ stopped: 'error', text: 'Gemini is not answering: HTTP 503: overloaded.' });
+    const full: CallFn = async () => {
+      throw new Error('HTTP 400: Request contains an invalid argument.');
+    };
+    expect((await new Coworker(bay, { call: full }).ask('status')).text).toBe('Gemini is not answering: HTTP 400: Request contains an invalid argument.');
   });
 });

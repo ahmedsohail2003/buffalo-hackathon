@@ -27,5 +27,6 @@ startAnnouncer(onLog, sink.log, sink.egress);
 
 const bay = getBay();
 registerMissionSlot('coworker', function Coworker() {
-  return <CoworkerPanel bay={bay} sink={sink} fabricate={designAndFabricate} inContainment={stowed} />;
+  // the app shows its own global Gemini ledger, so the panel's is left out
+  return <CoworkerPanel bay={bay} sink={sink} fabricate={designAndFabricate} inContainment={stowed} showLedger={false} />;
 });
