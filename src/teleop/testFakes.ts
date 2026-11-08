@@ -71,6 +71,9 @@ export class FakeSamples implements SampleApi {
   createMesh(): never {
     throw new Error('not in the fake');
   }
+  findSpot(): never {
+    throw new Error('not in the fake');
+  }
   remove(): boolean {
     return false;
   }

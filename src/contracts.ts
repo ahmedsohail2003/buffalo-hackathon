@@ -63,13 +63,22 @@ export interface MeshInfo {
   assetId?: string;
 }
 
-/** Where to put a new sample. Absolute xy, or relative to a sample id, 'containment' or 'arm'. */
+/**
+ * Where to put a sample. Absolute xy; or relative to a sample id, 'containment' or 'arm'; or a deck
+ * region (side); or nothing, for the best free spot. The first of these that is given wins.
+ */
 export interface Placement {
   x_mm?: number;
   y_mm?: number;
   relative_to?: string;
   direction?: 'left' | 'right' | 'front' | 'behind';
   distance_mm?: number;
+  /**
+   * A deck region, bay frame: left is -x, right +x, front farther from the base (rho >= 170 mm),
+   * behind nearer it (rho <= 160 mm), center within 20 degrees of straight ahead. Code picks the
+   * best free spot there.
+   */
+  side?: 'left' | 'right' | 'front' | 'behind' | 'center';
 }
 
 export type Rejection = { ok: false; code: string; reason: string; suggestion?: string };
@@ -83,6 +92,13 @@ export interface SampleApi {
   createPrimitive(spec: { name?: string; color: string; kind: 'box' | 'cylinder' | 'sphere'; width_mm: number; depth_mm?: number; height_mm: number } & Placement, by?: Sample['createdBy']): CreateResult;
   /** A measured mesh sample (the fabricator has already built, measured and scaled it). dims.r: footprint radius, metres. */
   createMesh(input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number; r?: number } } & Placement, by?: Sample['createdBy']): CreateResult;
+  /**
+   * A free, checked deck spot for an existing sample, which may be held (it never blocks itself).
+   * x_mm/y_mm is checked as given; relative_to + direction (+ distance_mm) is resolved, then checked;
+   * side gives the best free spot in that region; no placement gives the best free spot anywhere.
+   * xy is bay frame, metres, ready for arm.placeAt.
+   */
+  findSpot(id: string, placement?: Placement): { ok: true; xy: [number, number] } | Rejection;
   remove(id: string): boolean;
   reset(): void;
   onChange(cb: () => void): () => void;

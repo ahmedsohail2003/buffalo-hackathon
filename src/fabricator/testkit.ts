@@ -28,6 +28,7 @@ export function fakeBay(opts: { reject?: CreateResult } = {}): BayApi & { create
       list.push(s);
       return { ok: true, sample: s };
     },
+    findSpot: () => ({ ok: false, code: 'UNSUPPORTED', reason: 'fake' }),
     remove: () => false,
     reset: () => { list.length = 0; },
     onChange: () => () => undefined,
