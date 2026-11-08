@@ -38,21 +38,34 @@ function quotedName(text: string): string | undefined {
   return m?.[1].trim();
 }
 
-function firstSentence(text: string, max = 90): string {
-  const t = text.replace(/^[^:]{0,40}:\s*/, '').trim();
-  const m = t.match(/^(.*?[.!?])(\s|$)/);
-  const s = (m ? m[1] : t).trim();
-  const clipped = s.length > max ? `${s.slice(0, max).replace(/\s+\S*$/, '')}.` : s;
-  return /[.!?]$/.test(clipped) ? clipped : `${clipped}.`;
+const capitalised = (s: string) => s.replace(/^(\W*)(\w)/, (_, lead: string, c: string) => lead + c.toUpperCase());
+
+/**
+ * A reject line's reason as one short, complete sentence. The reason is what follows the code
+ * ('… → TOO_THIN: reason') or a short 'who: ' prefix; it is spoken only up to its first clause boundary
+ * (';', or a '.' that ends a sentence, so 12.5 mm stays whole) and never cut inside a clause.
+ */
+export function rejectSentence(text: string): string {
+  const coded = text.match(/→\s*[A-Z][A-Z0-9_]+:?\s+(\S.*)$/);
+  const reason = (coded ? coded[1] : text.replace(/^[^:]{0,40}:\s+/, '')).trim();
+  const clause = (reason.match(/^(.*?)(?:;|[.!?](?=\s|$))/)?.[1] ?? reason).replace(/[\s,:;–-]+$/, '').trim();
+  return `${capitalised(clause || reason)}.`;
 }
 
-/** "Fabricated "Chondrite shard": grip 32 mm, height 28 mm, 41 g (scaled 0.8)" -> a short summary. */
+/**
+ * The panel's line 'FABRICATOR "Iron meteorite" (Gemini design) → sample_4: …, 90 g, …' (or an older
+ * 'Fabricated "Chondrite shard": grip 32 mm, …, 41 g (scaled 0.8)') -> "Iron meteorite, Gemini design,
+ * fabricated. 90 grams. Scaled to fit." A name's own parenthetical ("Eros (NASA shape model)") is not spoken.
+ */
 export function fabricatorSummary(text: string): string {
-  const name = quotedName(text) ?? text.match(/fabricated\s+([A-Za-z][\w\s-]{1,40}?)(?:[:,(]|\s+-|$)/i)?.[1]?.trim();
-  const grip = text.match(/grip(?:\s+width)?\D{0,3}(\d+(?:\.\d+)?)\s*mm/i)?.[1];
-  const mass = text.match(/(\d+(?:\.\d+)?)\s*g\b/)?.[1];
-  const scaled = /scaled|scale\s*0\.\d/i.test(text);
-  let out = `${name ?? 'New sample'} fabricated.`;
+  const quoted = quotedName(text);
+  const name = quoted ? capitalised(quoted.replace(/\s*\([^)]*\)/g, '').trim() || quoted) : text.match(/fabricated\s+([A-Za-z][\w\s-]{1,40}?)(?:[:,(]|\s+-|$)/i)?.[1]?.trim();
+  const source = quoted ? text.match(/["”]\s*\(([^)]{2,40})\)\s*→/)?.[1]?.trim() : undefined;
+  const facts = text.includes('→') ? text.slice(text.indexOf('→')) : text; // the numbers, not the name
+  const grip = facts.match(/grip(?:\s+width)?\D{0,3}(\d+(?:\.\d+)?)\s*mm/i)?.[1];
+  const mass = facts.match(/(\d+(?:\.\d+)?)\s*g\b/)?.[1];
+  const scaled = /scaled|scale\s*0\.\d/i.test(facts);
+  let out = source ? `${name ?? 'New sample'}, ${source}, fabricated.` : `${name ?? 'New sample'} fabricated.`;
   if (grip) out += ` Grip ${grip} millimetres.`;
   if (mass) out += ` ${mass} grams.`;
   if (scaled) out += ' Scaled to fit.';
@@ -93,7 +106,8 @@ export function calloutFor(line: LogLine): Callout | null {
     return null;
   }
 
-  const negative = /\bnot\b|fail|refus|reject|miss|abort|outside/.test(t);
+  // a quoted sample name ("Mission patch", "Outside panel") must not read as a refusal
+  const negative = /\bnot\b|fail|refus|reject|miss|abort|outside/.test(t.replace(/["“][^"”]*["”]/g, '""'));
   // Containment only from the arm's own release line (code decided where the sample rests), never
   // from free text: Gemini's tool arguments and camera observations are logged as kind 'gemini'.
   const released = line.kind === 'info' ? text.match(/^released (.+) on the containment$/) : null;
@@ -105,7 +119,7 @@ export function calloutFor(line: LogLine): Callout | null {
   if (line.kind === 'fabricator' && /fabricat|materiali[sz]/.test(t) && !negative) {
     return { text: fabricatorSummary(text), priority: 'normal', key: `fab:${t}` };
   }
-  if (line.kind === 'reject') return { text: `Negative. ${firstSentence(text)}`, priority: 'normal', key: `reject:${t}` };
+  if (line.kind === 'reject') return { text: `Negative. ${rejectSentence(text)}`, priority: 'normal', key: `reject:${t}` };
   if (/\btask (complete|completed|done|finished)\b/.test(t)) return { text: 'Task complete.', priority: 'normal', key: 'task-done' };
   if (/\btask (failed|aborted)\b/.test(t)) return { text: 'Task failed.', priority: 'normal', key: 'task-failed' };
   return null;

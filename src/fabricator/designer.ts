@@ -62,7 +62,10 @@ export async function designProgram(description: string, deps: DesignerDeps, rep
 const NOT_DESIGN = new Set(['TOO_MANY', 'NO_FREE_SPOT', 'TOO_CLOSE_TO', 'ON_CONTAINMENT', 'ON_TRAY', 'TOO_FAR', 'TOO_CLOSE', 'BEHIND_ARM', 'UNREACHABLE', 'NO_REFERENCE', 'BAD_POSITION', 'REJECTED_STATE']);
 
 export type Designed = Placed & { attempts: number; latencyMs: number; source: 'gemini' | 'preset' | 'nasa' };
-/** A refusal; after a refused repair turn it carries the repaired design and a note on the first refusal. */
+/**
+ * A refusal. program is the Gemini design that was refused (absent when none got that far, or a preset was);
+ * after a refused repair turn, note says what the guardrail said about the first design.
+ */
 export type DesignRefusal = Rejection & { program?: FabProgram; note?: string };
 
 const ABORTED: Rejection = { ok: false, code: 'ABORTED', reason: 'the request was cancelled, so no sample was made' };
@@ -97,15 +100,15 @@ export async function designAndFabricate(bay: BayApi, description: string, place
     if (stop) return stop;
     const p = matchPreset(description);
     const r = await fabricatePreset(bay, p.id, placement, () => halted(bay, signal));
-    if (!r.ok) return r;
+    if (!r.ok) return { ok: false, code: r.code, reason: r.reason, ...(r.suggestion ? { suggestion: r.suggestion } : {}) }; // no Gemini design
     const note = `${why}; fabricated the closest preset (${p.label}) instead.`;
     return { ...r, say: `${r.say} ${note}`, note, attempts, latencyMs, source: p.source };
   };
-  const place = (f: Fabricated, note?: string): Designed | Rejection => {
+  const place = (f: Fabricated, note?: string): Designed | DesignRefusal => {
     const stop = halted(bay, signal);
-    if (stop) return stop;
+    if (stop) return { ...stop, program: f.program };
     const r = placeFabricated(bay, f, placement, 'gemini');
-    if (!r.ok) return r;
+    if (!r.ok) return { ...r, program: f.program };
     return { ...r, say: note ? `${r.say} ${note}` : r.say, ...(note ? { note } : {}), attempts, latencyMs, source: 'gemini' };
   };
   let first: { program: FabProgram; latencyMs: number };

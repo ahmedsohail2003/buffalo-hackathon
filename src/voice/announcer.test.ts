@@ -47,9 +47,7 @@ describe('announcer rules', () => {
     expect(calloutFor(line('info', 'released sample cube on the containment'))?.text).toBe('Sample cube secured in containment.');
     expect(calloutFor(line('gemini', '[coworker] place_in_containment -> ok, s1 released over containment (registry: inside)'))).toBeNull();
     expect(calloutFor(line('gemini', '[coworker] place_in_containment -> ok, s1 released over containment (registry: NOT inside)'))).toBeNull();
-    expect(calloutFor(line('reject', 'Fabricator: too heavy at 140 g; the limit is 100 g. Try a smaller one.'))?.text).toBe(
-      'Negative. too heavy at 140 g; the limit is 100 g.',
-    );
+    expect(calloutFor(line('reject', 'Fabricator: too heavy at 140 g; the limit is 100 g. Try a smaller one.'))?.text).toBe('Negative. Too heavy at 140 g.');
     expect(calloutFor(line('info', 'Task complete: 3 samples curated'))?.text).toBe('Task complete.');
     expect(calloutFor(line('info', '[CALLOUT] Welcome to Curation Bay 2.'))?.text).toBe('Welcome to Curation Bay 2.');
     expect(calloutFor(line('voice', 'Emergency stop. Arm locked.'))).toBeNull();
@@ -72,6 +70,48 @@ describe('announcer rules', () => {
       'Chondrite shard fabricated. Grip 32 millimetres. 41 grams. Scaled to fit.',
     );
     expect(calloutFor(line('fabricator', 'Fabricated CubeSat panel, grip width 40 mm'))?.text).toBe('CubeSat panel fabricated. Grip 40 millimetres.');
+  });
+
+  it("names a fabricated sample by its name and source, never by the operator's prompt", () => {
+    const say = (text: string) => calloutFor(line('fabricator', text))?.text;
+    expect(say('FABRICATOR "Iron meteorite" (Gemini design) → sample_4: scaled to 66% so the arm can lift it: 90 g, 32 mm across')).toBe(
+      'Iron meteorite, Gemini design, fabricated. 90 grams. Scaled to fit.',
+    );
+    expect(say('FABRICATOR "Eros (NASA shape model)" (NASA shape model) → sample_5: scaled to 57% to fit the sample bin: 55 mm wide, 30 mm across the jaw, 40 g')).toBe(
+      'Eros, NASA shape model, fabricated. 40 grams. Scaled to fit.',
+    );
+    expect(say('FABRICATOR "Bennu fragment" (preset fallback) → sample_6: fits as designed: 33 mm across the jaw, 22 mm tall, 24 g')).toBe(
+      'Bennu fragment, preset fallback, fabricated. 24 grams.',
+    );
+    // a name that contains a "negative" word is still announced, and its digits are not taken for the mass
+    expect(say('FABRICATOR "Mission patch 5g" (Gemini design) → sample_7: fits as designed: 30 mm across the jaw, 12 mm tall, 2 g')).toBe(
+      'Mission patch 5g, Gemini design, fabricated. 2 grams.',
+    );
+  });
+
+  it('a reject callout is the reason up to its first clause boundary, capitalised, never cut mid-phrase', () => {
+    const say = (text: string) => calloutFor(line('reject', text))?.text;
+    // the probes' cut-off callouts, now whole
+    expect(say('placeAt refused: that spot overlaps sample cube by 11 mm; put it right on top or at least 38 mm away from its centre.')).toBe(
+      'Negative. That spot overlaps sample cube by 11 mm.',
+    );
+    expect(say('FABRICATOR design → BAY_FULL: none of the default spots is free for a part this size')).toBe('Negative. None of the default spots is free for a part this size.');
+    expect(say('FABRICATOR "Ryugu pebble" (Gemini design) → BAY_STOPPED: the bay is stopped, so the sample was not placed')).toBe(
+      'Negative. The bay is stopped, so the sample was not placed.',
+    );
+    expect(say('containment place refused: the containment bin is full; there is no room for Iron meteorite.')).toBe('Negative. The containment bin is full.');
+    // the guardrail's refusal: its first clause
+    expect(say('FABRICATOR "Antenna boom" (preset) → TOO_THIN: it is too tall and thin for the jaw; short enough to carry (45 mm) it would be only 1 mm across, and the jaw needs at least 15 mm')).toBe(
+      'Negative. It is too tall and thin for the jaw.',
+    );
+    // a decimal point is not a sentence end; a code without a colon (teleop) still marks the reason
+    expect(say('FABRICATOR "Pebble" (Gemini design) → GUARD_CHECK: after scaling it is only 12.5 mm across, under the 15 mm the jaw needs')).toBe(
+      'Negative. After scaling it is only 12.5 mm across, under the 15 mm the jaw needs.',
+    );
+    expect(say('pick → UNREACHABLE that spot is out of reach')).toBe('Negative. That spot is out of reach.');
+    // a long clause with no boundary is spoken whole rather than cut
+    const long = `FABRICATOR design → BUILD_FAILED: the shape could not be built because ${'the outline crosses itself '.repeat(5).trim()}`;
+    expect(say(long)).toBe(`Negative. The shape could not be built because ${'the outline crosses itself '.repeat(5).trim()}.`);
   });
 });
 

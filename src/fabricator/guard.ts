@@ -90,21 +90,22 @@ export function fitSentence(scale: number, binding: FitKey | null, direction: 'd
   }
 }
 
+/** A refusal. Its first clause, up to the ';', is what mission control speaks (voice/announcer.ts). */
 function reject(m: Measured, L: SampleLimits, lo: Bound, hi: Bound): GuardResult {
   const gw = m.graspWidthMm, h = m.h * 1000, fp = m.footprintMm;
   const at = (s: number) => ({ gw: r0(gw * s), h: r0(h * s), mass: r0(m.massG * s ** 3), fp: r0(fp * s) });
   const a = at(hi.s);
   const b = at(lo.s);
   if (lo.key === 'grasp' && hi.key === 'height') {
-    return { ok: false, code: 'TOO_THIN', reason: `it is too tall and thin for the jaw: short enough to carry (${L.heightMaxMm} mm) it would be only ${a.gw} mm across, and the jaw needs at least ${L.graspMinMm} mm`,
+    return { ok: false, code: 'TOO_THIN', reason: `it is too tall and thin for the jaw; short enough to carry (${L.heightMaxMm} mm) it would be only ${a.gw} mm across, and the jaw needs at least ${L.graspMinMm} mm`,
       suggestion: `make it at least ${Math.ceil((h * L.graspMinMm) / L.heightMaxMm)} mm across, or no taller than ${Math.max(1, Math.floor((gw * L.heightMaxMm) / L.graspMinMm))} mm?` };
   }
   if (lo.key === 'grasp' && hi.key === 'footprint') {
-    return { ok: false, code: 'TOO_THIN', reason: `it is too long and thin: inside the ${L.footprintMaxMm} mm footprint it would be only ${a.gw} mm across, and the jaw needs at least ${L.graspMinMm} mm`,
+    return { ok: false, code: 'TOO_THIN', reason: `it is too long and thin; inside the ${L.footprintMaxMm} mm footprint it would be only ${a.gw} mm across, and the jaw needs at least ${L.graspMinMm} mm`,
       suggestion: `make it at least ${Math.ceil((fp * L.graspMinMm) / L.footprintMaxMm)} mm thick for its ${r0(fp)} mm length?` };
   }
   if (hi.key === 'mass') {
-    return { ok: false, code: 'TOO_DENSE', reason: `it is too dense to lift: at the smallest size the gripper can hold it would still weigh ${b.mass} g, over the ${L.massMaxG} g the arm can carry`,
+    return { ok: false, code: 'TOO_DENSE', reason: `it is too dense to lift; at the smallest size the gripper can hold it would still weigh ${b.mass} g, over the ${L.massMaxG} g the arm can carry`,
       suggestion: 'make it hollow, or a lighter material such as aluminium or rock?' };
   }
   if (hi.key === 'com') {
@@ -114,10 +115,10 @@ function reject(m: Measured, L: SampleLimits, lo: Bound, hi: Bound): GuardResult
   if (lo.key === 'height' && (hi.key === 'grasp' || hi.key === 'footprint')) {
     const lim = hi.key === 'grasp' ? L.graspMaxMm : L.footprintMaxMm;
     const size = hi.key === 'grasp' ? gw : fp;
-    return { ok: false, code: 'TOO_FLAT', reason: `it is too flat and wide: small enough for the ${hi.key === 'grasp' ? 'jaw' : 'footprint'} it would be only ${a.h} mm tall, and the fingertips need at least ${L.heightMinMm} mm`,
+    return { ok: false, code: 'TOO_FLAT', reason: `it is too flat and wide; small enough for the ${hi.key === 'grasp' ? 'jaw' : 'footprint'} it would be only ${a.h} mm tall, and the fingertips need at least ${L.heightMinMm} mm`,
       suggestion: `make it at least ${Math.ceil((size * L.heightMinMm) / lim)} mm tall, or narrower?` };
   }
-  return { ok: false, code: 'NO_SCALE_FITS', reason: `no single scale makes it fit: it is ${r0(gw)} mm across, ${r0(h)} mm tall and ${r0(m.massG)} g`, suggestion: 'make it more compact, about as wide as it is tall?' };
+  return { ok: false, code: 'NO_SCALE_FITS', reason: `no single scale makes it fit; it is ${r0(gw)} mm across, ${r0(h)} mm tall and ${r0(m.massG)} g`, suggestion: 'make it more compact, about as wide as it is tall?' };
 }
 
 /**

@@ -4,8 +4,8 @@
 
 import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import type { BayApi, MeshInfo, Rejection } from '../contracts';
-import { designAndFabricate, type Designed, type GenerateJson } from './designer';
-import { fabricatePreset, type FabRejection, type Placed } from './fabricate';
+import { designAndFabricate, type GenerateJson } from './designer';
+import { fabricatePreset, type Placed } from './fabricate';
 import { figures, pct } from './guard';
 import { PRESETS, matchPreset } from './presets';
 import './fabricator.css';
@@ -20,6 +20,18 @@ interface Props {
 export type Card = (Placed & { source?: MeshInfo['source']; latencyMs?: number; attempts?: number }) | (Rejection & { title?: string; note?: string });
 
 const SOURCE_LABEL: Record<MeshInfo['source'], string> = { preset: 'preset', gemini: 'Gemini design', nasa: 'NASA shape model' };
+/** Where a sample came from when a design request ended in a preset (Gemini offline or not answering). */
+const FALLBACK_LABEL = 'preset fallback';
+
+/**
+ * The mission-log line for one result. It names the sample and its source ("Gemini design", "preset", "NASA
+ * shape model" or "preset fallback"), never the typed prompt; mission control speaks it (voice/announcer.ts).
+ * A refusal names the refused design when there is one.
+ */
+export function fabLogLine(r: Placed | Rejection, source: string, name?: string): { text: string; kind: 'fabricator' | 'reject' } {
+  if (r.ok) return { text: `FABRICATOR "${r.sample.name}" (${source}) → ${r.sample.id}: ${r.reasons[0]}`, kind: 'fabricator' };
+  return { text: `FABRICATOR ${name ? `"${name}" (${source})` : 'design'} → ${r.code}: ${r.reason}`, kind: 'reject' };
+}
 
 export function FabricatorPanel({ bay, generateJson, log }: Props) {
   const [text, setText] = useState('a 30 mm fragment of asteroid Bennu');
@@ -27,9 +39,7 @@ export function FabricatorPanel({ bay, generateJson, log }: Props) {
   const [card, setCard] = useState<Card | null>(null);
   const [pickNote, setPickNote] = useState<string | null>(null);
 
-  const report = useCallback((what: string, r: Placed | Designed | Rejection | FabRejection) => {
-    log?.(r.ok ? `FABRICATOR ${what} → ${r.sample.id}: ${r.reasons[0]}` : `FABRICATOR ${what} → ${r.code}: ${r.reason}`, r.ok ? 'fabricator' : 'reject');
-  }, [log]);
+  const report = useCallback((line: { text: string; kind: string }) => log?.(line.text, line.kind), [log]);
 
   const runPreset = useCallback(async (id: string) => {
     if (!bay) return;
@@ -38,7 +48,7 @@ export function FabricatorPanel({ bay, generateJson, log }: Props) {
     setPickNote(null);
     try {
       const r = await fabricatePreset(bay, id);
-      report(`preset "${p?.label ?? id}"`, r);
+      report(fabLogLine(r, SOURCE_LABEL[p?.source ?? 'preset'], p?.program.name));
       setCard(r.ok ? { ...r, source: p?.source ?? 'preset' } : { ...r, title: p?.program.name });
     } finally {
       setBusy(null);
@@ -55,12 +65,12 @@ export function FabricatorPanel({ bay, generateJson, log }: Props) {
         const p = matchPreset(t);
         const r = await fabricatePreset(bay, p.id);
         const note = `Gemini is not connected (it needs a key); fabricated the closest preset (${p.label}) instead.`;
-        report(`offline match "${t.slice(0, 40)}"`, r);
+        report(fabLogLine(r, FALLBACK_LABEL, p.program.name));
         setCard(r.ok ? { ...r, source: p.source, note } : { ...r, title: p.program.name, note });
         return;
       }
       const r = await designAndFabricate(bay, t, undefined, { generateJson });
-      report(`design "${t.slice(0, 40)}"`, r);
+      report(r.ok ? fabLogLine(r, r.source === 'gemini' ? SOURCE_LABEL.gemini : FALLBACK_LABEL) : fabLogLine(r, SOURCE_LABEL.gemini, r.program?.name));
       setCard(r.ok ? r : { ...r, title: r.program?.name ?? 'Design' });
     } catch (e) {
       setCard({ ok: false, code: 'DESIGN_FAILED', reason: `the designer failed: ${String((e as Error).message).slice(0, 100)}`, suggestion: 'try a preset?' });
