@@ -61,9 +61,20 @@ function reject(code: ValidationCode | string, reason: string, suggestion?: stri
   return suggestion ? { ok: false, code, reason, suggestion } : { ok: false, code, reason };
 }
 
-/** bounding-circle radius used for spacing: hypot(w, d) / 2 */
-export function sampleRadius(dims: { w: number; d: number }): number {
-  return Math.hypot(dims.w, dims.d) / 2;
+/** footprint radius used for spacing and the bin: the measured dims.r, else the bounding circle hypot(w, d) / 2 */
+export function sampleRadius(dims: { w: number; d: number; r?: number }): number {
+  const r = dims.r;
+  return typeof r === 'number' && Number.isFinite(r) && r > 0 ? r : Math.hypot(dims.w, dims.d) / 2;
+}
+
+/**
+ * A measured footprint radius, kept to what the extents allow: no part reaches less than max(w, d) / 2
+ * or more than hypot(w, d) / 2 from its bounding-box centre. Undefined when missing or not a number.
+ */
+function footprintRadius(dims: { w: number; d: number; r?: number }): number | undefined {
+  const r = dims.r;
+  if (typeof r !== 'number' || !Number.isFinite(r) || r <= 0) return undefined;
+  return Math.min(Math.hypot(dims.w, dims.d) / 2, Math.max(Math.max(dims.w, dims.d) / 2, r));
 }
 
 /** grip width (mm) the jaw closes on: the measured mesh width, or dims.w */
@@ -156,7 +167,7 @@ export class SampleRegistry implements SampleApi {
 
   // ---------- validation ----------
 
-  private resolvePlacement(p: Placement, dims: { w: number; d: number; h: number }, gripMm: number): { x: number; y: number } | Rejection {
+  private resolvePlacement(p: Placement, dims: Sample['dims'], gripMm: number): { x: number; y: number } | Rejection {
     const hasXY = p.x_mm !== undefined || p.y_mm !== undefined;
     if (hasXY) {
       if (!Number.isFinite(p.x_mm) || !Number.isFinite(p.y_mm)) {
@@ -198,7 +209,7 @@ export class SampleRegistry implements SampleApi {
   }
 
   /** placement checks shared by createPrimitive and createMesh; null when the spot is fine */
-  checkSpot(x: number, y: number, dims: { w: number; d: number; h: number }, gripMm: number, yaw: number, ignoreId: string | null): Rejection | null {
+  checkSpot(x: number, y: number, dims: Sample['dims'], gripMm: number, yaw: number, ignoreId: string | null): Rejection | null {
     const r = rhoOf(x, y);
     const b = bearingOf(x, y);
     if (r < REACH.rhoMin || r > REACH.rhoMax) {
@@ -295,13 +306,15 @@ export class SampleRegistry implements SampleApi {
   }
 
   createMesh(
-    input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number } } & Placement,
+    input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number; r?: number } } & Placement,
     by: Sample['createdBy'] = 'gemini',
   ): CreateResult {
-    const dims = input.dims;
-    if (!dims || ![dims.w, dims.d, dims.h].every((v) => Number.isFinite(v) && v > 0 && v < 0.2)) {
+    const given = input.dims;
+    if (!given || ![given.w, given.d, given.h].every((v) => Number.isFinite(v) && v > 0 && v < 0.2)) {
       return reject('BAD_SIZE', 'the fabricated part has no valid size.', 'measure the part again');
     }
+    const r = footprintRadius(given);
+    const dims = { w: given.w, d: given.d, h: given.h, ...(r !== undefined ? { r } : {}) };
     const grip = input.mesh?.graspWidthMm;
     if (!Number.isFinite(grip)) return reject('BAD_SIZE', 'the fabricated part has no measured grip width.', 'measure the part again');
     if (grip > GRIP_MAX_MM) {

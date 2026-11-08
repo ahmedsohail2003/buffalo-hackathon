@@ -21,8 +21,10 @@ export interface Sample {
   /**
    * Extents in the sample's local frame, metres. The jaw always closes along local +x, so
    * w is the width the gripper holds, d is the depth along the fingers and h is the height.
+   * r, when present, is the measured footprint radius: the largest horizontal distance of the part
+   * from pos (fabricated meshes). Spacing and the containment bin use it instead of hypot(w, d) / 2.
    */
-  dims: { w: number; d: number; h: number };
+  dims: { w: number; d: number; h: number; r?: number };
   /** centre of the bounding box, bay frame, metres (z = h/2 when resting on the deck) */
   pos: Vec3;
   /** rotation about z, radians */
@@ -79,8 +81,8 @@ export interface SampleApi {
   get(id: string): Sample | undefined;
   /** A primitive part (box / cylinder / sphere), sizes in mm. Validated against grip, height and reach. */
   createPrimitive(spec: { name?: string; color: string; kind: 'box' | 'cylinder' | 'sphere'; width_mm: number; depth_mm?: number; height_mm: number } & Placement, by?: Sample['createdBy']): CreateResult;
-  /** A measured mesh sample (the fabricator has already built, measured and scaled it). */
-  createMesh(input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number } } & Placement, by?: Sample['createdBy']): CreateResult;
+  /** A measured mesh sample (the fabricator has already built, measured and scaled it). dims.r: footprint radius, metres. */
+  createMesh(input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number; r?: number } } & Placement, by?: Sample['createdBy']): CreateResult;
   remove(id: string): boolean;
   reset(): void;
   onChange(cb: () => void): () => void;
