@@ -42,6 +42,18 @@ function harness(steps: Parameters<typeof scripted>[0]) {
 }
 
 describe('Gemini client', () => {
+  it('counts the system prompt, tools and schema in "Leaving this machine", not only the message', async () => {
+    const { genai } = scripted([() => ok('{}')]);
+    const sent: Array<{ bytes: number; kind: string }> = [];
+    const client = createGeminiClient({ genai, sink: { log() {}, ledger() {}, egress: (e) => sent.push({ bytes: e.bytes, kind: e.kind }) }, sleep: async () => {} });
+    const system = 'S'.repeat(3000);
+    const schema = { type: 'object', description: 'D'.repeat(2000) };
+    await client.call({ purpose: 'design', model: FLASH, contents: 'hi', config: { systemInstruction: { parts: [{ text: system }] }, responseJsonSchema: schema } });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe('text');
+    expect(sent[0].bytes).toBeGreaterThan(5000); // the 2-character message alone used to be all it counted
+  });
+
   it('returns text and function calls and records one priced ledger entry', async () => {
     const { client, entries } = harness([
       () => ({

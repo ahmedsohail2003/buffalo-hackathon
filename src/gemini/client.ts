@@ -340,12 +340,16 @@ export class GeminiClient {
     };
   }
 
+  /**
+   * Everything this request sends, for the "Leaving this machine" counter: the contents and the
+   * config (system prompt, tool declarations, response schema). Images count as their decoded bytes.
+   */
   private noteEgress(req: CallRequest): void {
     if (!this.sink?.egress) return;
     try {
       let imageBytes = 0;
       let images = 0;
-      const text = JSON.stringify(req.contents, (key, value: unknown) => {
+      const text = JSON.stringify({ contents: req.contents, config: req.config ?? null }, (key, value: unknown) => {
         if (key === 'inlineData' && value && typeof value === 'object') {
           const data = (value as { data?: unknown }).data;
           if (typeof data === 'string') {
