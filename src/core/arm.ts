@@ -23,6 +23,7 @@ import {
   bearingOf,
   graspOffset,
   graspZ,
+  inContainment,
   jawForGap,
   jawForWidth,
   polarXY,
@@ -628,23 +629,50 @@ export class Arm implements ArmApi {
     return null;
   }
 
-  /** a free spot in the bin: the free floor spot nearest the centre, else on top of the centre */
+  /**
+   * A free spot in the bin. Floor spots first, filled from the corners inward (farthest from the
+   * centre first; among equals the two side corners, as far from the arm as the bin centre, before
+   * the corner nearest the base), so two or three samples fit side by side. When the floor is full,
+   * right on top of a sample already in the bin, lowest stack first, within STACK_MAX_H.
+   */
   private containmentSpot(s: Sample): Fail | { xy: [number, number] } {
     const [cx, cy] = CONTAINMENT_XY;
     const lim = CONTAINMENT_INNER / 2 - sampleRadius(s.dims) - 0.002;
-    const cands: [number, number][] = [];
-    for (let dx = -lim; dx <= lim + 1e-9; dx += 0.004) {
-      for (let dy = -lim; dy <= lim + 1e-9; dy += 0.004) cands.push([cx + dx, cy + dy]);
+    // offsets symmetric about the centre, exactly +-lim at the ends, at most 4 mm apart
+    const n = lim > 0 ? Math.ceil(lim / 0.004 - 1e-9) : 0;
+    const offs: number[] = [];
+    for (let i = -n; i <= n; i++) offs.push(n === 0 ? 0 : (i / n) * lim);
+    const rhoC = rhoOf(cx, cy);
+    const um = (m: number) => Math.round(m * 1e6); // micrometres, so mirror-image spots tie exactly
+    const cands: { xy: [number, number]; far: number; dRho: number; rho: number }[] = [];
+    for (const ox of offs) {
+      for (const oy of offs) {
+        const xy: [number, number] = [cx + ox, cy + oy];
+        const rho = rhoOf(xy[0], xy[1]);
+        if (rho < REACH.rhoMin || rho > REACH.rhoMax) continue;
+        cands.push({ xy, far: ox * ox + oy * oy, dRho: um(Math.abs(rho - rhoC)), rho: um(rho) });
+      }
     }
-    cands.push([cx, cy]);
-    cands.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy));
+    // farthest from the centre first, then nearest the bin centre's distance from the arm, then nearer the arm
+    cands.sort((a, b) => b.far - a.far || a.dRho - b.dRho || a.rho - b.rho);
     for (const c of cands) {
-      const r = rhoOf(c[0], c[1]);
-      if (r < REACH.rhoMin || r > REACH.rhoMax) continue;
-      if (this.samples.restZ(s, c[0], c[1]).on === 'containment') return { xy: c };
+      if (this.samples.restZ(s, c.xy[0], c.xy[1]).on === 'containment') return { xy: c.xy };
     }
-    const rest = this.samples.restZ(s, cx, cy);
-    if (rest.on === 'sample' && rest.support + s.dims.h <= STACK_MAX_H) return { xy: [cx, cy] };
+    // the floor is full: stack, centred over a sample in the bin (or over the bin centre if that is on one)
+    const tops: [number, number][] = [[cx, cy]];
+    for (const o of this.samples.list()) if (!o.held && inContainment(o.pos[0], o.pos[1])) tops.push([o.pos[0], o.pos[1]]);
+    let best: { xy: [number, number]; support: number } | null = null;
+    for (const xy of tops) {
+      const rho = rhoOf(xy[0], xy[1]);
+      if (rho < REACH.rhoMin || rho > REACH.rhoMax) continue;
+      const rest = this.samples.restZ(s, xy[0], xy[1]);
+      if (rest.on !== 'sample' || rest.support + s.dims.h > STACK_MAX_H + 1e-9) continue;
+      const under = this.samples.get(rest.underId!)!;
+      // right on top: the centre over the face of the sample it would rest on
+      if (Math.hypot(xy[0] - under.pos[0], xy[1] - under.pos[1]) > Math.min(under.dims.w, under.dims.d) / 2) continue;
+      if (!best || rest.support < best.support - 1e-9) best = { xy, support: rest.support };
+    }
+    if (best) return { xy: best.xy };
     return fail('UNREACHABLE', `the containment bin is full; there is no room for ${s.name}.`);
   }
 
