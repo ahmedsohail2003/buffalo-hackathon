@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import type { BayApi, MeshInfo, Rejection } from '../contracts';
 import { designAndFabricate, type Designed, type GenerateJson } from './designer';
 import { fabricatePreset, type FabRejection, type Placed } from './fabricate';
-import { pct } from './guard';
+import { figures, pct } from './guard';
 import { PRESETS, matchPreset } from './presets';
 import './fabricator.css';
 
@@ -183,6 +183,7 @@ export function ResultCard({ card, busy, onPick, pickNote }: { card: Card; busy:
   }
   const m = card.sample.mesh!;
   const overall = m.scale * (card.fab.program.design_scale ?? 1); // against the real design size
+  const shown = figures(card.fab.measured); // the same rounding as the card's sentences
   // name, numbers and Pick first: the Mission slot shows only about 200 px of a card that can be taller
   return (
     <div className="fab-card ok" aria-label="Fabricator result" role="status">
@@ -191,9 +192,9 @@ export function ResultCard({ card, busy, onPick, pickNote }: { card: Card; busy:
         <span className="fab-src">{SOURCE_LABEL[card.source ?? m.source]}{card.latencyMs ? ` · ${(card.latencyMs / 1000).toFixed(1)} s` : ''} · {card.sample.id}</span>
       </div>
       <div className="fab-metrics">
-        <span><b>{m.graspWidthMm.toFixed(0)}</b> mm across the jaw</span>
-        <span><b>{m.heightMm.toFixed(0)}</b> mm tall</span>
-        <span><b>{m.massG.toFixed(0)}</b> g</span>
+        <span><b>{shown.gw}</b> mm across the jaw</span>
+        <span><b>{shown.h}</b> mm tall</span>
+        <span><b>{shown.g}</b> g</span>
         <span className={overall === 1 ? '' : 'scaled'}>scale <b>{pct(overall)}</b></span>
       </div>
       <div className="fab-row">

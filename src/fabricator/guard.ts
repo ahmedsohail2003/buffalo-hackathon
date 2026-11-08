@@ -58,11 +58,19 @@ function windowFor(m: Measured, L: SampleLimits, hard: boolean): { hi: Bound; lo
 }
 
 /**
+ * The whole-number figures a measured sample is shown with (mm across the jaw, mm tall, g, mm wide), rounded
+ * once from the measurement, so the card's numbers and its sentences never disagree by a millimetre.
+ */
+export function figures(m: Measured): { gw: number; h: number; g: number; fp: number } {
+  return { gw: r0(m.widthAlongXMm || m.graspWidthMm), h: r0(m.h * 1000), g: r0(m.massG), fp: r0(m.footprintMm) };
+}
+
+/**
  * The guardrail sentence for a sample measured after scaling. scale is the overall scale against the real
  * design (the guardrail's own scale times any design_scale).
  */
 export function fitSentence(scale: number, binding: FitKey | null, direction: 'down' | 'up' | 'none', after: Measured): string {
-  const gw = r0(after.widthAlongXMm || after.graspWidthMm), h = r0(after.h * 1000), g = r0(after.massG), fp = r0(after.footprintMm);
+  const { gw, h, g, fp } = figures(after);
   if (direction === 'none' || !binding) {
     return scale === 1
       ? `fits as designed: ${gw} mm across the jaw, ${h} mm tall, ${g} g`

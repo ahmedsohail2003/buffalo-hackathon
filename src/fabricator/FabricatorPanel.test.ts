@@ -60,6 +60,20 @@ describe('Fabricator panel layout (the card must be visible after a design)', ()
 });
 
 describe('Fabricator result card', () => {
+  it('shows one grip width: its numbers and its sentences round the same measurement once', async () => {
+    // 33.47 mm across: rounding the registry's 0.1 mm figure (33.5) again gave 34, the sentence said 33
+    const block = { name: 'Test block', category: 'tool', color: '#888888', material: 'plastic', parts: [{ kind: 'box', size_mm: [33.47, 40, 30] }] };
+    const r = await designAndFabricate(fakeBay(), 'a test block', undefined, { generateJson: answer(block) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.sample.mesh!.graspWidthMm).toBe(33.5);
+    const text = cardHtml(r).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const widths = new Set([...text.matchAll(/(\d+) mm across/g)].map((x) => x[1]));
+    expect(widths).toEqual(new Set(['33']));
+    const heights = new Set([...text.matchAll(/(\d+) mm tall/g)].map((x) => x[1]));
+    expect(heights.size).toBe(1);
+  });
+
   it('shows the overall scale and the "as designed" size against the real design (a 3 m asteroid)', async () => {
     const r = await designAndFabricate(fakeBay(), 'a 3 metre asteroid', undefined, { generateJson: answer(ASTEROID_3M) });
     expect(r.ok).toBe(true);
