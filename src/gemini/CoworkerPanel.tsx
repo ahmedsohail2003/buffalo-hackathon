@@ -38,6 +38,8 @@ interface ChatItem {
 let nextId = 1;
 const MAX_ITEMS = 80;
 const LEDGER_ROWS = 6;
+/** How often to re-ask the server for health while Gemini or Live reads as unavailable. */
+const HEALTH_RETRY_MS = 5_000;
 
 const VOICE_LABEL: Record<LiveState, string> = {
   off: 'voice off',
@@ -178,13 +180,29 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
 
   useEffect(() => {
     let alive = true;
-    void getServerHealth().then((h) => {
-      if (!alive) return;
-      setHealth(h);
-      setOutput(h.elevenlabs ? 'elevenlabs' : 'native');
-    });
+    let decided = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // A slow first answer (a busy laptop, a server still starting) must not leave voice disabled until
+    // a reload: re-check every 5 s until the server reports Gemini and Live, and again on window focus.
+    const check = (refresh: boolean) => {
+      void getServerHealth({ refresh }).then((h) => {
+        if (!alive) return;
+        setHealth(h);
+        if (!decided) {
+          setOutput(h.elevenlabs ? 'elevenlabs' : 'native');
+          decided = h.ok; // the first real answer picks the voice; after that the operator's choice stands
+        }
+        clearTimeout(timer);
+        if (!h.gemini || !h.live) timer = setTimeout(() => check(true), HEALTH_RETRY_MS);
+      });
+    };
+    check(false);
+    const onFocus = () => check(true);
+    window.addEventListener('focus', onFocus);
     return () => {
       alive = false;
+      clearTimeout(timer);
+      window.removeEventListener('focus', onFocus);
     };
   }, []);
 
