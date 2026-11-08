@@ -1,7 +1,8 @@
 // React bindings for the module-level stores (runtime, bus, egress, registry).
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { BayState, GeminiCallEntry, LogLine, Sample } from '../contracts';
-import { getLedger, getLog, onLedger, onLog } from '../app/bus';
+import { getLedger, getLog, onLedger, onLog, subscribe, type BusEvents } from '../app/bus';
+import { ER_OVERLAY_MS } from '../app/erView';
 import { egressSnapshot, onEgress, type EgressSnapshot } from '../app/egress';
 import { getRuntime, type InputMode, type Telemetry } from '../app/runtime';
 
@@ -48,6 +49,29 @@ export function useLedger(): readonly GeminiCallEntry[] {
 
 export function useEgress(): EgressSnapshot {
   return useSyncExternalStore((cb) => onEgress(() => cb()), egressSnapshot);
+}
+
+let erCount = 0;
+
+/**
+ * The latest camera result of one kind, for ER_OVERLAY_MS after it arrives, else null. n is new for
+ * every event, so a React key on it restarts the overlay's fade.
+ */
+export function useErEvent<K extends Extract<keyof BusEvents, `er:${string}`>>(name: K): { ev: BusEvents[K]; n: number } | null {
+  const [cur, setCur] = useState<{ ev: BusEvents[K]; n: number } | null>(null);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = subscribe(name, (ev) => {
+      setCur({ ev: ev as BusEvents[K], n: ++erCount });
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setCur(null), ER_OVERLAY_MS);
+    });
+    return () => {
+      off();
+      if (timer) clearTimeout(timer);
+    };
+  }, [name]);
+  return cur;
 }
 
 // The registry can change every frame while a sample is carried: re-read it at most 10 times a second.

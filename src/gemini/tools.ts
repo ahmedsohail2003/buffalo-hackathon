@@ -8,7 +8,8 @@ import { HOME_Q } from '../core/constants';
 import { BAY_FACTS, BAY_FRAME_TEXT, defaultInContainment } from './bayFacts';
 import { errorText, generateJson as defaultGenerateJson, type CallFn } from './client';
 import { matchSample, mentionedSamples, pointAt, verifyQuestion } from './er';
-import { logTo, type FabricateFn, type FabricatorDeps, type LogSink } from './types';
+import { erEvent } from './erEvents';
+import { erTo, logTo, type FabricateFn, type FabricatorDeps, type LogSink } from './types';
 
 export type ToolName =
   | 'describe_bay'
@@ -468,7 +469,8 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
 
 /**
  * Run one tool call. Never throws: failures come back as { ok: false, code, reason }.
- * Logs the call and its result (kind 'gemini').
+ * Logs the call and its result (kind 'gemini'). A point_at or check_bay answer also goes to the
+ * sink's er hook as one event, for the viewer overlays.
  */
 export async function dispatchTool(
   bay: BayApi,
@@ -487,6 +489,8 @@ export async function dispatchTool(
     result = { ok: false, code: 'TOOL_ERROR', reason: `${name} failed: ${errorText(err)}`.slice(0, 220) };
   }
   logTo(c.sink, 'gemini', `[${source}] ${name} -> ${summarizeResult(name, result)}`);
+  const ev = erEvent(bay, name, a, result, source);
+  if (ev) erTo(c.sink, ev);
   return result;
 }
 

@@ -819,21 +819,121 @@ button {
   gap: 5px;
 }
 .baycam .img {
+  position: relative;
   aspect-ratio: 1;
   border-radius: 4px;
   overflow: hidden;
   background: #0a0f1a;
-  display: grid;
-  place-items: center;
   color: var(--faint);
   font-size: 11px;
-  text-align: center;
+}
+.baycam-host {
+  position: absolute;
+  inset: 0;
 }
 .baycam img,
 .baycam canvas {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/* point_at on the bay-camera image: crosshair at the model's point, ring at the registry truth */
+.er-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: er-life 6s linear forwards;
+}
+.er-overlay svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.er-cross {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: er-lock 0.45s ease-out;
+}
+.er-cross path {
+  fill: none;
+  stroke: #c4b5fd;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.er-cross path.halo {
+  stroke: rgba(8, 13, 24, 0.85);
+  stroke-width: 3.8px;
+}
+.er-cross circle {
+  fill: #ddd6fe;
+  stroke: rgba(8, 13, 24, 0.85);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+.er-truth {
+  fill: none;
+  stroke: #4ade80;
+  stroke-width: 1.6px;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 1px rgba(8, 13, 24, 0.9));
+}
+.er-caption {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  padding: 3px 6px 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(167, 139, 250, 0.6);
+  background: rgba(8, 13, 24, 0.84);
+  color: var(--text);
+  line-height: 1.2;
+  text-align: left;
+  pointer-events: auto;
+}
+.er-caption .l1 {
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.er-caption .who {
+  color: #c4b5fd;
+  font-weight: 650;
+}
+.er-caption .l2 {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@keyframes er-life {
+  0% {
+    opacity: 0;
+  }
+  4%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes er-lock {
+  from {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 .baycam .row {
   display: flex;

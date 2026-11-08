@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BayState } from '../contracts';
+import type { BayState, ErPointEvent } from '../contracts';
+import { insetPoint, pointCaption } from '../app/erView';
 import { getRuntime } from '../app/runtime';
 import { BayScene, getBayView } from '../scene/BayScene';
-import { useBayState, useLastCaptureAt, useNow, useTelemetry } from './hooks';
+import { useBayState, useErEvent, useLastCaptureAt, useNow, useTelemetry } from './hooks';
 
 const STATE_TEXT: Record<BayState, string> = {
   IDLE: 'Ready. The arm holds until the operator starts a cycle. AI cannot start it.',
@@ -110,10 +111,46 @@ function ResetPanel() {
   );
 }
 
+/** Arm lengths and the centre gap of the crosshair, and the registry ring radius, in image units (0-1000). */
+const CROSS = { arm: 78, gap: 22, ring: 46 };
+
+/**
+ * The last point_at answer on the camera image: a crosshair where the model pointed, a ring
+ * where the registry says the sample is, and a caption. It fades out after ER_OVERLAY_MS.
+ */
+function ErPointOverlay({ ev }: { ev: ErPointEvent }) {
+  const p = insetPoint(ev.point_yx);
+  const truth = ev.truth_yx ? insetPoint(ev.truth_yx) : null;
+  const cap = pointCaption(ev);
+  const { arm, gap } = CROSS;
+  const d = `M${-arm} 0H${-gap}M${gap} 0H${arm}M0 ${-arm}V${-gap}M0 ${gap}V${arm}`;
+  return (
+    <div className="er-overlay er-point" data-testid="er-point">
+      <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+        {truth && <circle className="er-truth" cx={truth.x} cy={truth.y} r={CROSS.ring} />}
+        <g transform={`translate(${p.x} ${p.y})`}>
+          <g className="er-cross">
+            <path className="halo" d={d} />
+            <path d={d} />
+            <circle r="9" />
+          </g>
+        </g>
+      </svg>
+      <div className="er-caption" role="status" title="Crosshair: where Robotics-ER pointed. Green ring: where the sample registry says it is.">
+        <span className="l1">
+          <span className="who">{cap.who}</span> · {cap.what}
+        </span>
+        <span className="l2">{cap.off}</span>
+      </div>
+    </div>
+  );
+}
+
 function BayCamCard() {
   const host = useRef<HTMLDivElement>(null);
   const lastAt = useLastCaptureAt();
   const now = useNow();
+  const point = useErEvent('er:point');
   useEffect(() => {
     const el = host.current;
     if (!el) return;
@@ -138,7 +175,10 @@ function BayCamCard() {
           LIVE
         </span>
       </div>
-      <div className="img" ref={host} />
+      <div className="img">
+        <div className="baycam-host" ref={host} />
+        {point && <ErPointOverlay key={point.n} ev={point.ev} />}
+      </div>
       <div className="row">
         <span>{ago === null ? "Gemini's fixed view" : ago < 2 ? 'captured just now' : `captured ${ago} s ago`}</span>
         <span className="num">768²</span>

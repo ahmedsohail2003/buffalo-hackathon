@@ -2,14 +2,11 @@
 // Poses are read every frame (the core moves a held sample with the jaw without emitting onChange).
 import * as THREE from 'three';
 import type { Sample, SampleApi } from '../contracts';
-import { VIEW_ONLY } from './environment';
+import { LABEL_GAP, disposeLabelSprite, makeLabelSprite } from './labelSprite';
 import { buildRegisteredSample, onSampleGeometryChange } from './registry';
 
 const PLACEHOLDER_COLOR = '#8d939c';
 const RETRY_MS = 200;
-/** name tag height above the top of a sample, and its world height (m) */
-const LABEL_GAP = 0.016;
-const LABEL_H = 0.013;
 
 interface Item {
   mesh: THREE.Mesh;
@@ -26,37 +23,6 @@ function lookKey(s: Sample): string {
   const m = s.mesh;
   const meshKey = m ? `${m.assetId ?? ''}|${m.scale}|${m.source}|${JSON.stringify(m.program)}` : '';
   return `${s.name}|${s.kind}|${s.dims.w.toFixed(5)}|${s.dims.d.toFixed(5)}|${s.dims.h.toFixed(5)}|${s.color}|${meshKey}`;
-}
-
-/** A small dark name tag for the viewer (layer 1: the bay camera never sees it). */
-function makeLabel(text: string): THREE.Sprite {
-  const font = '600 40px Inter, system-ui, sans-serif';
-  const c = document.createElement('canvas');
-  const ctx = c.getContext('2d')!;
-  ctx.font = font;
-  const w = Math.ceil(ctx.measureText(text).width) + 44;
-  c.width = w;
-  c.height = 64;
-  ctx.font = font;
-  ctx.fillStyle = 'rgba(8,13,24,0.78)';
-  ctx.beginPath();
-  ctx.roundRect(2, 2, w - 4, 60, 30);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(56,189,248,0.55)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.fillStyle = '#e2e8f0';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, 22, 34);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sprite.scale.set((LABEL_H * w) / 64, LABEL_H, 1);
-  sprite.center.set(0.5, 0);
-  sprite.layers.set(VIEW_ONLY);
-  sprite.renderOrder = 5;
-  return sprite;
 }
 
 function primitiveGeometry(s: Sample): THREE.BufferGeometry {
@@ -171,7 +137,7 @@ export class SampleLayer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData.sampleId = s.id;
-      const label = makeLabel(s.name);
+      const label = makeLabelSprite(s.name);
       this.group.add(mesh, label);
       this.items.set(s.id, { mesh, label, key, ownsGeometry: look.ownsGeometry, placeholder: look.placeholder });
     }
@@ -184,8 +150,7 @@ export class SampleLayer {
     this.group.remove(item.mesh, item.label);
     if (item.ownsGeometry) item.mesh.geometry.dispose();
     (item.mesh.material as THREE.Material).dispose();
-    item.label.material.map?.dispose();
-    item.label.material.dispose();
+    disposeLabelSprite(item.label);
     this.items.delete(id);
   }
 

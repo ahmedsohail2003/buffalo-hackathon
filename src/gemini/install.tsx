@@ -3,8 +3,10 @@
 // the Mission pane. The design_sample tool runs the Fabricator.
 import type { Sample } from '../contracts';
 import { getBay } from '../app/runtime';
-import { log, onLog, recordGeminiCall } from '../app/bus';
+import { emitEr, log, onLog, recordGeminiCall, subscribe } from '../app/bus';
 import { recordEgress } from '../app/egress';
+import { erMarkerHook } from '../scene/erMarker';
+import { registerSceneHook } from '../scene/registry';
 import { registerMissionSlot } from '../ui/slots';
 import { inContainment } from '../core';
 import { designAndFabricate } from '../fabricator';
@@ -18,12 +20,15 @@ const sink: LogSink = {
   log: (l) => log(l.kind, l.text, l.t),
   ledger: recordGeminiCall,
   egress: (rec) => recordEgress({ dest: rec.dest, kind: rec.kind, bytes: rec.bytes }),
+  er: emitEr,
 };
 const stowed = (s: Sample) => !s.held && inContainment(s.pos[0], s.pos[1]);
 
 configureGemini({ sink });
 configureTools({ sink, fabricate: designAndFabricate, inContainment: stowed });
 startAnnouncer(onLog, sink.log, sink.egress);
+// point_at answers on the deck (the Bay pane's inset draws them too)
+registerSceneHook(erMarkerHook((cb) => subscribe('er:point', cb)));
 
 const bay = getBay();
 registerMissionSlot('coworker', function Coworker() {
