@@ -536,14 +536,18 @@ export interface GenerateJsonArgs {
 
 export type GenerateJsonFn = (a: GenerateJsonArgs) => Promise<{ text: string; latencyMs: number }>;
 
-/** A 400 caused by the response schema (the API names the field in its message). */
-export function isSchemaError(err: unknown): boolean {
-  return statusOf(err) === 400 && /schema/i.test(errorText(err));
+/**
+ * Any HTTP 400. The API often does not name the field it refused (a schema keyword it does not support
+ * comes back as "Request contains an invalid argument"), so every 400 may be a schema problem.
+ */
+export function isBadRequest(err: unknown): boolean {
+  return statusOf(err) === 400;
 }
 
 /**
- * The fast model with a JSON schema, thinking LOW, purpose 'design'. On a 400 that names the schema it
- * retries once without the schema (the prompt still asks for JSON). latencyMs covers both tries.
+ * The fast model with a JSON schema, thinking LOW, purpose 'design'. On any HTTP 400 it retries once
+ * without the schema (the prompt still asks for JSON), so a schema problem degrades to plain JSON mode
+ * instead of failing the design. latencyMs covers both tries.
  */
 export function createGenerateJson(call: CallFn, model: string = FLASH): GenerateJsonFn {
   return async ({ system, prompt, schema, signal }) => {
@@ -560,7 +564,7 @@ export function createGenerateJson(call: CallFn, model: string = FLASH): Generat
       const res = await call({ ...base, config: { systemInstruction, responseMimeType: 'application/json', responseJsonSchema: schema } });
       return { text: res.text, latencyMs: Date.now() - t0 };
     } catch (err) {
-      if (!isSchemaError(err)) throw err;
+      if (!isBadRequest(err)) throw err;
       const res = await call({ ...base, config: { systemInstruction, responseMimeType: 'application/json' } });
       return { text: res.text, latencyMs: Date.now() - t0 };
     }

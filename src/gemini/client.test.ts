@@ -197,4 +197,45 @@ describe('Gemini client', () => {
     expect(seen[1].config?.systemInstruction).toEqual({ parts: [{ text: 'You design samples.' }] });
     expect(client.recent().every((e) => e.purpose === 'design')).toBe(true);
   });
+
+  it('generateJson retries once without the schema on ANY 400, even one that names no field', async () => {
+    // what the real API answers to a schema keyword it does not support
+    const { client, seen } = harness([
+      () => {
+        throw httpError(400, 'Request contains an invalid argument.');
+      },
+      () => ok('{"name":"plain JSON mode"}'),
+    ]);
+    const gen = createGenerateJson((req) => client.call(req));
+    expect((await gen({ system: 's', prompt: 'p', schema: { type: 'object' } })).text).toBe('{"name":"plain JSON mode"}');
+    expect(seen).toHaveLength(2);
+    expect(seen[0].config?.responseJsonSchema).toEqual({ type: 'object' });
+    expect(seen[1].config?.responseJsonSchema).toBeUndefined();
+    expect(seen[1].config?.responseMimeType).toBe('application/json');
+
+    // only once: a second 400 fails the call (the designer then falls back to a preset)
+    const twice = harness([
+      () => {
+        throw httpError(400, 'Request contains an invalid argument.');
+      },
+      () => {
+        throw httpError(400, 'Request contains an invalid argument.');
+      },
+      () => ok('never'),
+    ]);
+    const gen2 = createGenerateJson((req) => twice.client.call(req));
+    await expect(gen2({ system: 's', prompt: 'p', schema: {} })).rejects.toMatchObject({ status: 400 });
+    expect(twice.seen).toHaveLength(2);
+
+    // not a 400: no schema-less retry
+    const denied = harness([
+      () => {
+        throw httpError(403, 'Permission denied');
+      },
+      () => ok('never'),
+    ]);
+    const gen3 = createGenerateJson((req) => denied.client.call(req));
+    await expect(gen3({ system: 's', prompt: 'p', schema: {} })).rejects.toMatchObject({ status: 403 });
+    expect(denied.seen).toHaveLength(1);
+  });
 });
