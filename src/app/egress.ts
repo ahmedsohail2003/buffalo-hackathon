@@ -92,6 +92,16 @@ export function formatBytes(n: number): string {
   return `${(n / 1_000_000).toFixed(1)} MB`;
 }
 
+/**
+ * The badge text for projector mode, short enough for a 1280 px wide top bar: frames and the total
+ * sent, for example "1 frame · 124 kB".
+ */
+export function egressShort(s: EgressSnapshot): string {
+  if (s.requests === 0) return 'nothing yet';
+  const total = formatBytes(s.bytes);
+  return s.images > 0 ? `${s.images} frame${s.images === 1 ? '' : 's'} · ${total}` : total;
+}
+
 /** One short line for the top-bar badge, for example "2 bay frames · 3.1 kB text". */
 export function egressSummary(s: EgressSnapshot): string {
   if (s.requests === 0) return 'nothing yet';

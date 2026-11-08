@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GeminiCallEntry } from '../contracts';
-import { MAX_LOG_LINES, emit, exportJson, getLedger, getLog, ledgerSummary, log, onLog, recordGeminiCall, resetBus, subscribe } from './bus';
+import { MAX_LOG_LINES, emit, emitEr, exportJson, getLedger, getLog, ledgerSummary, log, onLog, recordGeminiCall, resetBus, subscribe } from './bus';
 
 function call(over: Partial<GeminiCallEntry> = {}): GeminiCallEntry {
   return { t: 1, model: 'm', purpose: 'coworker', latencyMs: 800, promptTokens: 100, outputTokens: 20, thoughtTokens: 5, costUsd: 0.001, ok: true, ...over };
@@ -42,6 +42,47 @@ describe('events', () => {
     expect(got).toEqual([{ a: 1 }]);
     expect(err).toHaveBeenCalled();
     err.mockRestore();
+  });
+
+  it('emitEr publishes a point_at result as er:point, once', () => {
+    const got: string[] = [];
+    subscribe('er:point', (ev) => got.push(`${ev.sample_id}:${ev.error_mm}`));
+    emitEr({
+      kind: 'point',
+      t: 1,
+      source: 'live',
+      label: 'Bennu',
+      point_yx: [600, 570],
+      sample_id: 'sample_2',
+      sample_name: 'Bennu (NASA shape model)',
+      found_mm: [57, -156, 16],
+      error_mm: 1.5,
+      truth_mm: [56, -155, 16],
+      truth_yx: [601, 569],
+    });
+    expect(got).toEqual(['sample_2:1.5']);
+  });
+
+  it('emitEr publishes a check_bay result as er:check, and only there', () => {
+    const points: unknown[] = [];
+    const checks: string[] = [];
+    subscribe('er:point', (ev) => points.push(ev));
+    subscribe('er:check', (ev) => checks.push(`${ev.decided_by}:${ev.decision}:${ev.camera}`));
+    emitEr({
+      kind: 'check',
+      t: 1,
+      source: 'coworker',
+      question: 'Is Bennu in the containment bin?',
+      decision: true,
+      decided_by: 'registry',
+      camera: 'yes',
+      agree: true,
+      observation: 'A dark rock sits in the bin.',
+      sample_id: 'sample_2',
+      sample_name: 'Bennu (NASA shape model)',
+    });
+    expect(checks).toEqual(['registry:true:yes']);
+    expect(points).toEqual([]);
   });
 });
 

@@ -215,3 +215,52 @@ export interface GeminiCallEntry {
   ok: boolean;
   error?: string;
 }
+
+/**
+ * A point_at result for the viewer overlays (bus event 'er:point'): where the bay-camera model
+ * pointed, where that lands on the deck, and where the registry says the sample is. Image points
+ * are bay-camera [y, x] normalized 0-1000 (origin top-left); positions are bay frame, mm.
+ */
+export interface ErPointEvent {
+  kind: 'point';
+  /** Date.now() ms */
+  t: number;
+  /** who asked: 'coworker', 'live', ... */
+  source: string;
+  /** what was asked for, for example "the Bennu sample" */
+  label: string;
+  /** the image point the model returned */
+  point_yx: [number, number];
+  /** the registry sample the point was matched to, or null */
+  sample_id: string | null;
+  sample_name: string | null;
+  /** where the point lands, on the plane of the sample's centre (null: the ray misses the deck) */
+  found_mm: Vec3 | null;
+  /** deck-plane distance between found_mm and the registry position, mm */
+  error_mm: number | null;
+  /** the matched sample's registry position, and the same position projected into the image */
+  truth_mm: Vec3 | null;
+  truth_yx: [number, number] | null;
+}
+
+/** A check_bay result for the viewer overlays (bus event 'er:check'): the decision, who made it, what the camera said. */
+export interface ErCheckEvent {
+  kind: 'check';
+  /** Date.now() ms */
+  t: number;
+  source: string;
+  question: string;
+  /** the decision (the tool's ok) */
+  decision: boolean;
+  /** 'registry' when code could answer the question itself (then it decides), else 'camera' */
+  decided_by: 'registry' | 'camera';
+  /** what the camera answered */
+  camera: 'yes' | 'no' | 'unsure';
+  /** whether the camera agrees with the registry; null when only the camera could answer */
+  agree: boolean | null;
+  /** the camera's one-sentence observation */
+  observation: string;
+  /** the one sample the question is about, or null */
+  sample_id: string | null;
+  sample_name: string | null;
+}

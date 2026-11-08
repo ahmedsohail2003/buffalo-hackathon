@@ -1,6 +1,6 @@
 // Small local interfaces the integrator wires to the app bus, the egress counter and the
-// fabricator. Types plus two tiny helpers; no DOM.
-import type { BayApi, GeminiCallEntry, LogLine, Placement, Sample } from '../contracts';
+// fabricator. Types plus a few tiny helpers; no DOM.
+import type { BayApi, ErCheckEvent, ErPointEvent, GeminiCallEntry, LogLine, Placement, Sample } from '../contracts';
 
 /** One outbound payload, for the "what leaves this machine" counter. */
 export interface EgressNote {
@@ -18,6 +18,8 @@ export interface LogSink {
   log(line: LogLine): void;
   ledger(entry: GeminiCallEntry): void;
   egress?(rec: EgressNote): void;
+  /** One event per point_at or check_bay result, for the viewer overlays (wire to bus.emitEr). */
+  er?(ev: ErPointEvent | ErCheckEvent): void;
 }
 
 /** A subscription to mission-log lines, for example `bus.onLog`. Returns the unsubscribe function. */
@@ -55,5 +57,14 @@ export function logTo(sink: LogSink | null | undefined, kind: LogLine['kind'], t
     sink.log({ t: Date.now(), kind, text });
   } catch {
     // a broken sink must never break a tool call
+  }
+}
+
+export function erTo(sink: LogSink | null | undefined, ev: ErPointEvent | ErCheckEvent): void {
+  if (!sink?.er) return;
+  try {
+    sink.er(ev);
+  } catch {
+    // a broken overlay must never break a tool call
   }
 }

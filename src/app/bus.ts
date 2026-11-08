@@ -1,6 +1,6 @@
 // The app bus: the mission log, the Gemini ledger and a small typed event channel.
 // Module-level state, safe to import from any layer (no DOM, no React).
-import type { GeminiCallEntry, LogLine } from '../contracts';
+import type { ErCheckEvent, ErPointEvent, GeminiCallEntry, LogLine } from '../contracts';
 
 export type LogKind = LogLine['kind'];
 
@@ -8,6 +8,10 @@ export type LogKind = LogLine['kind'];
 export interface BusEvents {
   log: LogLine;
   gemini: GeminiCallEntry;
+  /** a point_at result: the bay-camera inset and the deck marker draw it */
+  'er:point': ErPointEvent;
+  /** a check_bay result: the bay-camera inset shows the decision */
+  'er:check': ErCheckEvent;
 }
 
 export type BusEventName = keyof BusEvents | (string & {});
@@ -125,6 +129,14 @@ export function ledgerSummary(entries: readonly GeminiCallEntry[] = calls): Ledg
     s.lastModel = last.model;
   }
   return s;
+}
+
+// ---- Camera results -------------------------------------------------------------------------
+
+/** Publish one camera result: a point_at as 'er:point', a check_bay as 'er:check'. */
+export function emitEr(ev: ErPointEvent | ErCheckEvent): void {
+  if (ev.kind === 'point') emit('er:point', ev);
+  else emit('er:check', ev);
 }
 
 // ---- Export ---------------------------------------------------------------------------------

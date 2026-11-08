@@ -21,8 +21,19 @@ export interface SceneHookContext {
   viewerCam: THREE.PerspectiveCamera;
 }
 
-/** Called once with the scene; update() then runs every rendered frame. */
-export type SceneHook = (ctx: SceneHookContext) => { update(): void; dispose?(): void };
+/** What a scene hook adds: update() runs every rendered frame; labels() lists its floating tags, if any. */
+export interface SceneHookInstance {
+  update(): void;
+  dispose?(): void;
+  /**
+   * Viewer-only tags anchored at their bottom centre. The view staggers them with the sample tags:
+   * right after the tag of the sample named by sprite.userData.tagAfter, else after all of them.
+   */
+  labels?(): readonly THREE.Sprite[];
+}
+
+/** Called once with the scene. */
+export type SceneHook = (ctx: SceneHookContext) => SceneHookInstance;
 
 interface GeometryEntry {
   geometry: SampleGeometryFactory;
