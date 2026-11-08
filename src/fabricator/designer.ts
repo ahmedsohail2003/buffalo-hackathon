@@ -1,6 +1,7 @@
 // The designer: Gemini turns a plain-language description into a shape program (JSON, schema-constrained).
 // Code sanitizes, builds, measures and guards it. On a guardrail refusal Gemini gets ONE repair turn with the
-// refusal sentence; if that fails too (or Gemini does not answer), the closest preset is fabricated instead.
+// refusal sentence; if the repaired design is refused too, that refusal is the answer (code decides). The
+// closest preset is fabricated only when Gemini cannot answer: an HTTP error, a timeout or no usable JSON.
 // Node-safe: the model call is injected (deps.generateJson), so tests use a fake.
 
 import type { BayApi, Placement, Rejection } from '../contracts';
@@ -61,6 +62,8 @@ export async function designProgram(description: string, deps: DesignerDeps, rep
 const NOT_DESIGN = new Set(['TOO_MANY', 'NO_FREE_SPOT', 'TOO_CLOSE_TO', 'ON_CONTAINMENT', 'ON_TRAY', 'TOO_FAR', 'TOO_CLOSE', 'BEHIND_ARM', 'UNREACHABLE', 'NO_REFERENCE', 'BAD_POSITION', 'REJECTED_STATE']);
 
 export type Designed = Placed & { attempts: number; latencyMs: number; source: 'gemini' | 'preset' | 'nasa' };
+/** A refusal; after a refused repair turn it carries the repaired design and a note on the first refusal. */
+export type DesignRefusal = Rejection & { program?: FabProgram; note?: string };
 
 const ABORTED: Rejection = { ok: false, code: 'ABORTED', reason: 'the request was cancelled, so no sample was made' };
 
@@ -80,11 +83,13 @@ function halted(bay: BayApi, signal?: AbortSignal): Rejection | null {
 
 /**
  * Description -> Gemini program -> fabricate -> bay.samples.createMesh(..., 'gemini'), with one repair turn on a
- * design refusal and a keyword-matched preset as the last resort. Placement refusals come back as they are.
- * A cancelled request (signal aborted, e.g. by an emergency stop) returns ABORTED with no fallback, and
- * nothing is placed while the bay is STOPPED or ESTOPPED (checked right before placing).
+ * design refusal. If Gemini answered both times and the guardrail refused both designs, the second refusal is
+ * returned (code, reason, suggestion). A keyword-matched preset is fabricated only when Gemini cannot answer.
+ * Placement refusals come back as they are. A cancelled request (signal aborted, e.g. by an emergency stop)
+ * returns ABORTED with no fallback, and nothing is placed while the bay is STOPPED or ESTOPPED (checked right
+ * before placing).
  */
-export async function designAndFabricate(bay: BayApi, description: string, placement: Placement | undefined, deps: DesignerDeps, signal?: AbortSignal): Promise<Designed | Rejection> {
+export async function designAndFabricate(bay: BayApi, description: string, placement: Placement | undefined, deps: DesignerDeps, signal?: AbortSignal): Promise<Designed | DesignRefusal> {
   let latencyMs = 0;
   let attempts = 0;
   const fallback = async (why: string): Promise<Designed | Rejection> => {
@@ -126,5 +131,13 @@ export async function designAndFabricate(bay: BayApi, description: string, place
   latencyMs += second.latencyMs;
   const f2: Fabricated | FabRejection = fabricateProgram(second.program, 'gemini');
   if (f2.ok) return place(f2, `Gemini repaired its design after the guardrail said: ${f1.reason}.`);
-  return fallback(`the guardrail refused Gemini's design twice (${f2.reason})`);
+  // Gemini answered twice and the guardrail refused both designs: the refusal is the answer, not a preset.
+  return {
+    ok: false,
+    code: f2.code,
+    reason: f2.reason,
+    ...(f2.suggestion ? { suggestion: f2.suggestion } : {}),
+    ...(f2.program ? { program: f2.program } : {}),
+    note: `Gemini redesigned it once after the guardrail said: ${f1.reason}.`,
+  };
 }

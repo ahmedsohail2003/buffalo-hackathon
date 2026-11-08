@@ -59,7 +59,7 @@ export function FabricatorPanel({ bay, generateJson, log }: Props) {
       }
       const r = await designAndFabricate(bay, t, undefined, { generateJson });
       report(`design "${t.slice(0, 40)}"`, r);
-      setCard(r.ok ? r : { ...r, title: 'Design' });
+      setCard(r.ok ? r : { ...r, title: r.program?.name ?? 'Design' });
     } catch (e) {
       setCard({ ok: false, code: 'DESIGN_FAILED', reason: `the designer failed: ${String((e as Error).message).slice(0, 100)}`, suggestion: 'try a preset?' });
     } finally {

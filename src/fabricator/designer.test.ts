@@ -9,6 +9,7 @@ beforeAll(registerNasaAssets);
 const BENNU = { name: 'Bennu fragment', category: 'asteroid', color: '#4a4744', material: 'rubble_pile', density_g_cm3: 0.01, parts: [{ kind: 'rock', radius_mm: 22, rock: { seed: 7, roughness: 0.5, craters: 4, elongation: [1.2, 1, 0.8] } }] };
 const NEEDLE = { name: 'Antenna', category: 'satellite_part', color: '#dddddd', material: 'aluminum', parts: [{ kind: 'cylinder', radius_mm: 2, height_mm: 150 }] };
 const SHORT_ROD = { name: 'Antenna stub', category: 'satellite_part', color: '#dddddd', material: 'aluminum', parts: [{ kind: 'cylinder', radius_mm: 9, height_mm: 40 }] };
+const LYING_ROD = { name: 'Antenna rod', category: 'satellite_part', color: '#dddddd', material: 'aluminum', parts: [{ kind: 'box', size_mm: [120, 4, 4] }] };
 
 type Call = Parameters<GenerateJson>[0];
 function fake(...answers: (unknown | Error)[]): { gen: GenerateJson; calls: Call[] } {
@@ -65,22 +66,41 @@ describe('designer (Gemini proposes, code decides)', () => {
     expect(r.say).toContain('Gemini repaired its design');
   });
 
-  it('refused twice, or no answer at all: the closest preset is fabricated and the note says why', async () => {
-    const twice = fakeBay();
-    const a = fake(NEEDLE, NEEDLE);
-    const r = await designAndFabricate(twice, 'an iron meteorite antenna', undefined, { generateJson: a.gen });
+  it('refused twice: the second refusal comes back (code, reason, suggestion), never a keyword preset', async () => {
+    const bay = fakeBay();
+    const a = fake(NEEDLE, LYING_ROD);
+    const r = await designAndFabricate(bay, 'an iron meteorite antenna', undefined, { generateJson: a.gen });
     expect(a.calls).toHaveLength(2);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.sample.name).toBe('Iron meteorite');
-    expect(r.note).toMatch(/refused Gemini's design twice .* closest preset \(Iron meteorite\)/);
-    expect(twice.created[0].by).toBe('preset');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.code).toBe('TOO_THIN');
+    expect(r.reason).toMatch(/too long and thin/); // the second design's reason, not the first's
+    expect(r.suggestion).toMatch(/thick for its \d+ mm length/);
+    expect(r.program?.name).toBe('Antenna rod');
+    expect(r.note).toMatch(/^Gemini redesigned it once after the guardrail said: it is too tall and thin/);
+    expect(bay.created).toEqual([]); // no preset was fabricated in its place
+  });
 
+  it('no answer at all (an HTTP error, a timeout, no JSON): the closest preset is fabricated and the note says why', async () => {
     const silent = fakeBay();
     const b = fake(new Error('timeout 15000 ms'));
     const s = await designAndFabricate(silent, 'the asteroid Itokawa', undefined, { generateJson: b.gen });
     expect(s.ok && s.sample.mesh!.source).toBe('nasa');
     expect(s.ok && s.note).toMatch(/^Gemini did not answer \(timeout 15000 ms\)/);
+
+    const chatty = fakeBay();
+    const c = fake('Sorry, I can only describe it in words.');
+    const t = await designAndFabricate(chatty, 'an iron meteorite', undefined, { generateJson: c.gen });
+    expect(t.ok && t.sample.name).toBe('Iron meteorite');
+    expect(t.ok && t.note).toMatch(/^Gemini did not answer \(the designer did not return JSON/);
+    expect(chatty.created[0].by).toBe('preset');
+
+    // the repair turn itself does not answer: Gemini cannot answer, so the preset fallback stays
+    const cut = fakeBay();
+    const d = fake(NEEDLE, Object.assign(new Error('HTTP 400: Request contains an invalid argument.'), { status: 400 }));
+    const u = await designAndFabricate(cut, 'a whip antenna', undefined, { generateJson: d.gen });
+    expect(d.calls).toHaveLength(2);
+    expect(u.ok && u.note).toMatch(/the repair turn did not answer; fabricated the closest preset/);
   });
 
   it('a placement refusal from the registry is returned as is, with no repair turn', async () => {
