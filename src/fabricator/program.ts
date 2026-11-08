@@ -36,10 +36,15 @@ export const MATERIALS = Object.keys(MATERIAL_DENSITY) as SampleMaterial[];
 
 const DEFAULT_COLOR = '#8a8580';
 
-const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
-const pairs = (max: number, what: string) => ({ type: 'array', maxItems: max, description: what, items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 } });
+// The API answers HTTP 400 "Request contains an invalid argument" to minItems/maxItems, so array lengths
+// live in the descriptions; sanitizeProgram pads, cuts and clamps every array anyway.
+const vec3 = { type: 'array', items: { type: 'number' }, description: 'Three numbers [x, y, z].' };
+const pairs = (what: string) => ({ type: 'array', description: what, items: { type: 'array', items: { type: 'number' }, description: 'Two numbers.' } });
 
-/** JSON Schema for Gemini `responseJsonSchema`. Only widely supported keywords; code re-validates everything. */
+/**
+ * JSON Schema for Gemini `responseJsonSchema`. Only keywords the API accepts (program.test.ts holds the
+ * list); code re-validates everything.
+ */
 export const PROGRAM_JSON_SCHEMA = {
   type: 'object',
   description: 'A small sample for a robot glovebox. Millimetres, z up, the deck is z = 0. Every part starts with its base on z = 0 centred on x = y = 0; rot_deg turns it about its base centre, then pos_mm moves it.',
@@ -51,8 +56,7 @@ export const PROGRAM_JSON_SCHEMA = {
     material: { type: 'string', enum: MATERIALS, description: 'Default material; code owns its density.' },
     parts: {
       type: 'array',
-      minItems: 1,
-      maxItems: MAX_PARTS,
+      description: `1 to ${MAX_PARTS} parts.`,
       items: {
         type: 'object',
         properties: {
@@ -61,8 +65,8 @@ export const PROGRAM_JSON_SCHEMA = {
           radius_mm: { type: 'number', description: 'Radius (half the diameter): cylinder, sphere, cone bottom, torus ring, capsule, rock.' },
           radius2_mm: { type: 'number', description: 'cone top radius (0 = point) or torus tube radius.' },
           height_mm: { type: 'number', description: 'cylinder, cone, capsule (total) or extrude height.' },
-          profile_mm: pairs(24, 'lathe only: [radius, z] points bottom to top, revolved about z.'),
-          outline_mm: pairs(24, 'extrude only: closed [x, y] outline, extruded up by height_mm.'),
+          profile_mm: pairs('lathe only: up to 24 [radius, z] points bottom to top, revolved about z.'),
+          outline_mm: pairs('extrude only: closed outline of up to 24 [x, y] points, extruded up by height_mm.'),
           rock: {
             type: 'object',
             description: 'rock only: a noise-displaced lump.',
