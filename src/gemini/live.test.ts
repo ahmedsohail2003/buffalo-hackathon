@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GeminiCallEntry } from '../contracts';
 import type { SpeakerLike } from '../voice/elevenSpeaker';
 import { makeFakeBay, makeSample } from './__fixtures__/fakeBay';
-import { LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
+import { LIVE_PROMPT, LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
 import type { ToolContext } from './tools';
 import type { LogSink } from './types';
 
@@ -146,6 +146,22 @@ describe('Live config', () => {
     expect(decls).toHaveLength(9);
     expect(decls.find((d) => d.name === 'design_sample')?.behavior).toBe('NON_BLOCKING');
     expect(JSON.stringify(cfg.systemInstruction)).toContain('[BAY EVENT]');
+  });
+
+  it('the prompt keeps CAPCOM in English, factual, prompt to acknowledge long tools, and honest about an idle bay', () => {
+    const text = (buildLiveConfig().systemInstruction as { parts: Array<{ text: string }> }).parts[0].text;
+    expect(text).toBe(LIVE_PROMPT);
+    const line = (re: RegExp) => LIVE_PROMPT.split('\n').find((l) => re.test(l)) ?? '';
+    expect(line(/English/)).toMatch(/^Always answer in English\./);
+    expect(line(/Say again/)).toBe('If you did not hear a clear request from the operator, say "Say again?" and nothing else.');
+    expect(line(/Report only facts/)).toMatch(/tool results, \[BAY EVENT\] messages/);
+    const ack = line(/acknowledgement/);
+    for (const tool of ['point_at', 'check_bay', 'pick_sample', 'place_sample', 'place_in_containment', 'design_sample']) expect(ack).toContain(tool);
+    expect(ack).toMatch(/two-to-four-word acknowledgement such as "Pointing now\."/);
+    const idle = line(/IDLE/);
+    expect(idle).toMatch(/give the cycle start .*and then repeat the request/);
+    expect(idle).toMatch(/Never promise to act later/);
+    expect(idle).not.toMatch(/wait for a \[BAY EVENT\]/); // it used to promise to act once the bay ran
   });
 
   it('asks the server for a token locked to the config', async () => {
