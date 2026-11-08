@@ -1,7 +1,8 @@
 // The tools Gemini may call (typed coworker and Live voice share them) and the one dispatcher
 // that runs them. Moving and creating tools are refused while the bay is STOPPED or ESTOPPED, and
 // arm moves also while it is IDLE (AI never starts a cycle), with a reason that can be spoken;
-// read-only tools always answer. Every call is a log line.
+// read-only tools always answer (the camera checks first send an idle arm home, while RUNNING only,
+// when it would hide the view). Every call is a log line.
 // No DOM at import time.
 import type { BayApi, MoveResult, Placement, Sample } from '../contracts';
 import { HOME_Q } from '../core/constants';
@@ -114,7 +115,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'check_bay',
     description:
-      'Ask the fixed bay camera (Gemini Robotics-ER) a yes/no question about what it sees now, for example "Is Itokawa inside the containment bin?". When the question is about one sample, also give its sample_id. Where the registry can answer, the registry decides and the result says whether the camera agrees. Read-only; always available.',
+      'Ask the fixed bay camera (Gemini Robotics-ER) a yes/no question about what it sees now, for example "Is Itokawa inside the containment bin?". When the question is about one sample, also give its sample_id. Where the registry can answer, the registry decides and the result says whether the camera agrees. Always available; while the bay is RUNNING, an idle, empty arm parked over the bin or the sample moves home first so it does not hide the view.',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -127,7 +128,7 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'point_at',
     description:
-      'Find something on the bay camera image (Gemini Robotics-ER pointing) and compare it with the registry: returns the deck position in mm and the localization error in mm. When it is a sample, also give its sample_id. Read-only; always available.',
+      'Find something on the bay camera image (Gemini Robotics-ER pointing) and compare it with the registry: returns the deck position in mm and the localization error in mm. When it is a sample, also give its sample_id. Always available; while the bay is RUNNING, an idle, empty arm parked over the sample moves home first so it does not hide the view.',
     parameters: {
       type: 'OBJECT',
       properties: {
