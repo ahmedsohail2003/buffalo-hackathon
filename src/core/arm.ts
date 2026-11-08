@@ -31,7 +31,7 @@ import {
 } from './constants';
 import { IK_TOL, IkSolver, wrapPi, type IkResult } from './ik';
 import { ArmModel, NUM_JOINTS } from './model';
-import { SampleRegistry, gripWidthMm, sampleRadius } from './samples';
+import { SampleRegistry, gripWidthMm, sampleRadius, spotSuggestion } from './samples';
 import { GateError } from './gate';
 
 export type ArmLog = (text: string, kind: 'info' | 'safety' | 'reject') => void;
@@ -46,8 +46,8 @@ export interface ArmOptions {
   servoGain?: number;
 }
 
-type Fail = { ok: false; code: PrimCode; reason: string };
-const fail = (code: PrimCode, reason: string): Fail => ({ ok: false, code, reason });
+type Fail = { ok: false; code: PrimCode; reason: string; suggestion?: string };
+const fail = (code: PrimCode, reason: string, suggestion?: string): Fail => (suggestion ? { ok: false, code, reason, suggestion } : { ok: false, code, reason });
 const mmStr = (m: number): string => `${Math.round(m * 1000)} mm`;
 
 interface Segment {
@@ -591,19 +591,26 @@ export class Arm implements ArmApi {
     };
   }
 
-  /** reasons a held sample cannot be put down at xy (deck placement) */
+  /**
+   * Reasons a held sample cannot be put down at xy (deck placement). A refusal for the bin wall or for
+   * spacing names the nearest free deck spot, so the next try can succeed.
+   */
   private checkPlaceSpot(s: Sample, xy: [number, number]): Fail | null {
     const [x, y] = xy;
     const r = rhoOf(x, y);
     if (r < REACH.rhoMin || r > REACH.rhoMax || Math.abs(bearingOf(x, y)) > REACH.bearingMax) return this.unreachable('that spot', x, y);
+    const near = (): string | undefined => {
+      const spot = this.samples.nearestFreeSpot(s.id, xy);
+      return spot ? spotSuggestion(spot) : undefined;
+    };
     const rest = this.samples.restZ(s, x, y);
-    if (rest.on === 'wall') return fail('UNREACHABLE', `that spot is on the containment bin's wall; place it inside the bin or away from it.`);
+    if (rest.on === 'wall') return fail('UNREACHABLE', `that spot is on the containment bin's wall; place it inside the bin or away from it.`, near());
     const rad = sampleRadius(s.dims);
     if (rest.on !== 'sample') {
       // the whole footprint, not only the centre, must clear the wall: inside the inner face or past the outer one
       const m = Math.max(Math.abs(x - CONTAINMENT_XY[0]), Math.abs(y - CONTAINMENT_XY[1]));
       if (m > CONTAINMENT_INNER / 2 - rad && m < CONTAINMENT_OUTER_HALF + rad) {
-        return fail('UNREACHABLE', `${s.name} would rest across the containment bin's wall there; place it inside the bin or at least ${mmStr(CONTAINMENT_OUTER_HALF + rad)} from the bin centre on each side.`);
+        return fail('UNREACHABLE', `${s.name} would rest across the containment bin's wall there; place it inside the bin or at least ${mmStr(CONTAINMENT_OUTER_HALF + rad)} from the bin centre on each side.`, near());
       }
     }
     if (rest.on === 'deck') {
@@ -611,7 +618,7 @@ export class Arm implements ArmApi {
         if (o.id === s.id || o.held) continue;
         const need = Math.max(MIN_SPACING, rad + sampleRadius(o.dims) + SPACING_EXTRA);
         const d = Math.hypot(x - o.pos[0], y - o.pos[1]);
-        if (d < need - 1e-9) return fail('UNREACHABLE', `that spot is ${mmStr(d)} from ${o.name}; leave at least ${mmStr(need)} between their centres so the jaw has room.`);
+        if (d < need - 1e-9) return fail('UNREACHABLE', `that spot is ${mmStr(d)} from ${o.name}; leave at least ${mmStr(need)} between their centres so the jaw has room.`, near());
       }
     }
     if (rest.on === 'sample') {
@@ -620,7 +627,7 @@ export class Arm implements ArmApi {
       const inner = Math.min(under.dims.w, under.dims.d) / 2;
       if (d > inner) {
         const need = sampleRadius(s.dims) + sampleRadius(under.dims);
-        return fail('UNREACHABLE', `that spot overlaps ${under.name} by ${mmStr(need - d)}; put it right on top or at least ${mmStr(need)} away from its centre.`);
+        return fail('UNREACHABLE', `that spot overlaps ${under.name} by ${mmStr(need - d)}; put it right on top or at least ${mmStr(need)} away from its centre.`, near());
       }
       if (rest.support + s.dims.h > STACK_MAX_H + 1e-9) {
         return fail('UNREACHABLE', `stacking ${s.name} on ${under.name} would make a ${mmStr(rest.support + s.dims.h)} tower, taller than the ${mmStr(STACK_MAX_H)} the arm can carry over.`);

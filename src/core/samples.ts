@@ -106,6 +106,12 @@ function reject(code: ValidationCode | string, reason: string, suggestion?: stri
   return suggestion ? { ok: false, code, reason, suggestion } : { ok: false, code, reason };
 }
 
+/** a refusal's suggestion naming a free deck spot, in mm: "try (-120, -60) mm" */
+export function spotSuggestion(xy: readonly [number, number]): string {
+  const r = (m: number) => Math.round(m * 1000) || 0;
+  return `try (${r(xy[0])}, ${r(xy[1])}) mm`;
+}
+
 /** footprint radius used for spacing and the bin: the measured dims.r, else the bounding circle hypot(w, d) / 2 */
 export function sampleRadius(dims: { w: number; d: number; r?: number }): number {
   const r = dims.r;
@@ -282,8 +288,29 @@ export class SampleRegistry implements SampleApi {
     const at = this.resolvePlacement(placement ?? {}, s.dims, grip, s.yaw, s.id, s.name);
     if ('ok' in at) return at;
     const bad = this.checkSpot(at.x, at.y, s.dims, grip, s.yaw, s.id);
-    if (bad) return bad;
+    if (bad) {
+      // crowded or on the bin: name the nearest free spot, so one more call recovers
+      const near = bad.code === 'TOO_CLOSE' || bad.code === 'ON_CONTAINMENT' ? this.nearestFreeSpot(s.id, [at.x, at.y]) : null;
+      return near ? { ...bad, suggestion: spotSuggestion(near) } : bad;
+    }
     return { ok: true, xy: [at.x, at.y] };
+  }
+
+  /**
+   * The free spot of the search (slots and reach band) nearest to xy for an existing sample, which may
+   * be held (it never blocks itself); null when none is free. Rounded to the millimetre, and checked
+   * as rounded, so a suggestion that names it in mm is a spot that passes.
+   */
+  nearestFreeSpot(id: string, xy: [number, number]): [number, number] | null {
+    const s = this.resolve(String(id));
+    if (!s) return null;
+    const grip = gripWidthMm(s);
+    const d = (p: readonly [number, number]) => Math.hypot(p[0] - xy[0], p[1] - xy[1]);
+    for (const p of [...SEARCH_SPOTS].sort((a, b) => d(a) - d(b))) {
+      const q: [number, number] = [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000];
+      if (this.checkSpot(q[0], q[1], s.dims, grip, s.yaw, s.id) === null) return q;
+    }
+    return null;
   }
 
   /** placement checks shared by createPrimitive and createMesh; null when the spot is fine */

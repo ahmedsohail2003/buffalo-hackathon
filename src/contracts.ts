@@ -106,9 +106,10 @@ export interface SampleApi {
 
 export type PrimCode = 'REJECTED_STATE' | 'UNREACHABLE' | 'NO_SAMPLE' | 'ALREADY_HELD' | 'NOTHING_HELD' | 'GRASP_MISSED' | 'ABORTED';
 
+/** On a refusal, suggestion (when present) says what to try instead, e.g. the nearest free spot: "try (-120, -60) mm". */
 export type MoveResult =
   | { ok: true; tcp_mm: Vec3; held: string | null }
-  | { ok: false; code: PrimCode; reason: string };
+  | { ok: false; code: PrimCode; reason: string; suggestion?: string };
 
 export interface ArmSnapshot {
   /** joint values, radians: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper */

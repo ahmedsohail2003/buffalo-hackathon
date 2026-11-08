@@ -196,3 +196,74 @@ describe('findSpot: a free, checked deck spot for a sample already in the bay', 
     }
   });
 });
+
+describe('a refused place names the nearest free spot', () => {
+  const parse = (s: string | undefined): [number, number] => {
+    const m = /^try \((-?\d+), (-?\d+)\) mm$/.exec(s ?? '');
+    if (!m) throw new Error(`no spot in suggestion ${JSON.stringify(s)}`);
+    return [Number(m[1]) / 1000, Number(m[2]) / 1000];
+  };
+
+  it("the probe's five refused spots for Bennu each come back with the nearest free spot, and that spot works", async () => {
+    const { bay, bennu } = await seededBay();
+    // as in the probe: the cube is stowed, Itokawa stays at its slot, Bennu is in the gripper
+    expect((await runUntil(bay, bay.arm.pick('sample_1'))).ok).toBe(true);
+    expect((await runUntil(bay, bay.arm.placeInContainment())).ok).toBe(true);
+    expect(await runUntil(bay, bay.arm.pick(bennu.id))).toMatchObject({ ok: true, held: bennu.id });
+    const held = bay.samples.get(bennu.id)!;
+    const free = (p: readonly [number, number]) => bay.samples.checkSpot(p[0], p[1], held.dims, gripWidthMm(held), held.yaw, held.id) === null;
+    let last: [number, number] | null = null;
+    for (const [x, y] of [
+      [-100, -130],
+      [-85, -145],
+      [-65, -135],
+      [-30, -165],
+      [-70, -165],
+    ]) {
+      const asked: [number, number] = [x / 1000, y / 1000];
+      const q = bay.arm.joints();
+      const r = await runUntil(bay, bay.arm.placeAt(asked));
+      expect(r, `${x}, ${y}`).toMatchObject({ ok: false, code: 'UNREACHABLE' });
+      expect((r as { reason: string }).reason, `${x}, ${y}`).toMatch(/wall|overlaps|between their centres/);
+      expect(bay.arm.joints()).toEqual(q); // refused before moving
+      const xy = parse((r as { suggestion?: string }).suggestion);
+      // a free spot, and no free spot of the search (in whole mm) is nearer to the one asked for
+      expect(free(xy), `${x}, ${y}`).toBe(true);
+      for (const p of SEARCH_SPOTS) {
+        const mm: [number, number] = [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000];
+        if (free(mm)) expect(dist2(mm, asked), `${x}, ${y}`).toBeGreaterThan(dist2(xy, asked) - 0.001);
+      }
+      last = xy;
+    }
+    // one more call recovers
+    expect(await runUntil(bay, bay.arm.placeAt(last!))).toMatchObject({ ok: true, held: null });
+    expect(dist2(bay.samples.get(bennu.id)!.pos, last!)).toBeLessThan(0.002);
+  });
+
+  it('only spacing and the bin wall get one; findSpot names the nearest free spot for the same refusals', async () => {
+    const bay = await makeBay();
+    const tall = bay.samples.createPrimitive({ color: '#a855f7', kind: 'box', width_mm: 20, height_mm: 30 });
+    if (!tall.ok) throw new Error(tall.reason);
+    expect((await runUntil(bay, bay.arm.pick(tall.sample.id))).ok).toBe(true);
+    const cube = bay.samples.get('sample_1')!;
+    // out of reach, and a stack too tall to carry over: no spot to suggest
+    const far = await runUntil(bay, bay.arm.placeAt([0, -0.26]));
+    expect(far).toMatchObject({ ok: false, code: 'UNREACHABLE' });
+    expect(far).not.toHaveProperty('suggestion');
+    const tower = await runUntil(bay, bay.arm.placeAt([cube.pos[0], cube.pos[1]]));
+    expect((tower as { reason: string }).reason).toMatch(/tower/);
+    expect(tower).not.toHaveProperty('suggestion');
+    // crowding the cube on the deck: suggested
+    const near = await runUntil(bay, bay.arm.placeAt([cube.pos[0] + 0.035, cube.pos[1]]));
+    expect((near as { reason: string }).reason).toMatch(/between their centres/);
+    expect((near as { suggestion?: string }).suggestion).toMatch(/^try \(-?\d+, -?\d+\) mm$/);
+    // findSpot: spacing and the bin keep-out are suggested, reach is not
+    const s = (p: Placement) => bay.samples.findSpot(tall.sample.id, p) as Rejection;
+    expect(s({ x_mm: cube.pos[0] * 1000 + 30, y_mm: cube.pos[1] * 1000 })).toMatchObject({ code: 'TOO_CLOSE', suggestion: expect.stringMatching(/^try \(/) });
+    expect(s({ x_mm: CONTAINMENT_XY[0] * 1000, y_mm: CONTAINMENT_XY[1] * 1000 })).toMatchObject({ code: 'ON_CONTAINMENT', suggestion: expect.stringMatching(/^try \(/) });
+    expect(s({ x_mm: 0, y_mm: -260 }).suggestion).not.toMatch(/^try \(/);
+    // and the suggested spot is free
+    const xy = parse(s({ x_mm: cube.pos[0] * 1000 + 30, y_mm: cube.pos[1] * 1000 }).suggestion);
+    expect(bay.samples.findSpot(tall.sample.id, { x_mm: xy[0] * 1000, y_mm: xy[1] * 1000 })).toMatchObject({ ok: true });
+  });
+});
