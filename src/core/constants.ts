@@ -165,7 +165,8 @@ export function inContainment(x: number, y: number, margin = 0): boolean {
 // ---------- default sample spots ----------
 /**
  * Five deck spots on the rho = 165 mm arc (the middle of REACH), at bearings 0, +20, -18, +40 and
- * +60 deg: 51.6-57.3 mm apart, all at least 70 mm (|dx| or |dy|) from the bin centre.
+ * +60 deg: 51.6-57.3 mm apart, all at least 70 mm (|dx| or |dy|) from the bin centre. New samples
+ * try these first, then the rest of the reach band (samples.ts SEARCH_SPOTS).
  */
 export const SLOTS: [number, number][] = [0, 20, -18, 40, 60].map((d) => polarXY(0.165, (d * Math.PI) / 180));
 
@@ -187,7 +188,8 @@ export const ATTACH_XY_TOL = 0.015;
 export const ATTACH_BAND: [number, number] = [-0.002, 0.03];
 
 // ---------- registry ----------
-export const MAX_SAMPLES = 8;
+/** the most samples the registry tracks, deck and bin together (the reach band holds 7-9 typical ones) */
+export const MAX_SAMPLES = 10;
 export const MIN_SPACING = 0.04;
 export const SPACING_EXTRA = 0.01;
 export const DEFAULT_RELATIVE_MM = 80;

@@ -79,6 +79,7 @@ export function makeFakeBay(opts: { samples?: Sample[]; state?: BayState } = {})
       get: (id) => samples.find((s) => s.id === id),
       createPrimitive: () => ({ ok: false, code: 'UNSUPPORTED', reason: 'fake bay' }),
       createMesh: () => ({ ok: false, code: 'UNSUPPORTED', reason: 'fake bay' }),
+      findSpot: () => ({ ok: false, code: 'UNSUPPORTED', reason: 'fake bay' }),
       remove: (id) => {
         const i = samples.findIndex((s) => s.id === id);
         if (i < 0) return false;

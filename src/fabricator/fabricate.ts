@@ -141,7 +141,7 @@ export function fabricateProgram(rawProgram: unknown, source: MeshInfo['source']
 
 /** Put a fabricated sample on the deck through the registry (placement, spacing and reach live there). */
 export function placeFabricated(bay: BayApi, f: Fabricated, placement: Placement | undefined, by: Sample['createdBy']): Placed | Rejection {
-  const created = bay.samples.createMesh({ name: f.name, color: f.color, mesh: f.mesh, dims: f.dims, ...(placement ?? {}) }, by);
+  const created = bay.samples.createMesh({ name: f.name, color: f.color, mesh: f.mesh, dims: { ...f.dims, r: f.measured.r }, ...(placement ?? {}) }, by);
   if (!created.ok) return created;
   const s = created.sample;
   const at = ` It is at x ${r0(s.pos[0] * 1000)}, y ${r0(s.pos[1] * 1000)} mm.`;

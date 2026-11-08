@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MeshInfo } from '../contracts';
-import { CONTAINMENT_XY, REACH, Z_HOVER, Z_LIFT, jawForWidth, polarXY } from './constants';
+import { CONTAINMENT_FLOOR_Z, CONTAINMENT_XY, REACH, Z_HOVER, Z_LIFT, inContainment, jawForWidth, polarXY } from './constants';
 import { dist2, flush, makeBay, runUntil, steps } from './testutil';
 
 describe('Arm flows', () => {
@@ -102,8 +102,11 @@ describe('Arm flows', () => {
     }
     expect((await runUntil(bay, bay.arm.pick(ids[0]))).ok).toBe(true);
     expect((await runUntil(bay, bay.arm.placeInContainment())).ok).toBe(true);
+    // the first rests on the floor in a corner, which leaves the second no room beside it or on top
     const first = bay.samples.get(ids[0])!;
-    expect(dist2(first.pos, CONTAINMENT_XY)).toBeLessThan(0.002);
+    expect(first.pos[2]).toBeCloseTo(CONTAINMENT_FLOOR_Z + 0.015, 6);
+    expect(inContainment(first.pos[0], first.pos[1])).toBe(true);
+    expect(dist2(first.pos, CONTAINMENT_XY)).toBeGreaterThan(0.01);
     expect((await runUntil(bay, bay.arm.pick(ids[1]))).ok).toBe(true);
     const q = bay.arm.joints();
     const full = await runUntil(bay, bay.arm.placeInContainment());

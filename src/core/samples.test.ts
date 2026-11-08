@@ -111,22 +111,24 @@ describe('SampleRegistry', () => {
     expect(arm.ok && arm.sample.pos[1]).toBeCloseTo(-0.08, 9);
   });
 
-  it(`holds at most ${MAX_SAMPLES} samples and says when no default spot is free`, () => {
+  it(`holds at most ${MAX_SAMPLES} samples; past the slots the default spot comes from the reach band`, () => {
     const reg = new SampleRegistry();
-    const made = [];
-    for (let i = 0; i < 4; i++) made.push(reg.createPrimitive(box(20, 20)));
-    expect(made.every((m) => m.ok)).toBe(true);
-    const full = rej(reg.createPrimitive(box(20, 20)));
-    expect(full.code).toBe('BAY_FULL');
-    oneSentence(full.reason);
-    // three more on the outer edge, between the slots
-    for (const d of [10, 30, 50]) {
-      const [x, y] = polarXY(0.199, (d * Math.PI) / 180);
-      expect(reg.createPrimitive(box(15, 20, { depth_mm: 15, x_mm: x * 1000, y_mm: y * 1000 })).ok).toBe(true);
+    for (let i = 1; i < MAX_SAMPLES - 1; i++) {
+      const r = reg.createPrimitive(box(15, 20, { depth_mm: 15 }));
+      expect(r.ok, `sample ${i + 1}`).toBe(true);
+      if (r.ok && i >= SLOTS.length) expect(SLOTS.some(([x, y]) => x === r.sample.pos[0] && y === r.sample.pos[1])).toBe(false);
     }
+    const at = (deg: number) => {
+      const [x, y] = polarXY(0.199, (deg * Math.PI) / 180);
+      return { depth_mm: 15, x_mm: x * 1000, y_mm: y * 1000 };
+    };
+    expect(reg.createPrimitive(box(15, 20, at(10))).ok).toBe(true);
     expect(reg.list().length).toBe(MAX_SAMPLES);
-    const [x, y] = polarXY(0.135, 0.2);
-    expect(rej(reg.createPrimitive(box(15, 20, { depth_mm: 15, x_mm: x * 1000, y_mm: y * 1000 }))).reason).toContain(`${MAX_SAMPLES} samples`);
+    // a free spot, but the registry is full
+    const full = rej(reg.createPrimitive(box(15, 20, at(30))));
+    expect(full.code).toBe('BAY_FULL');
+    expect(full.reason).toContain(`${MAX_SAMPLES} samples`);
+    oneSentence(full.reason);
   });
 
   it('uses the injected reach probe as the last check', () => {
@@ -149,6 +151,45 @@ describe('SampleRegistry', () => {
     const far = rej(reg.createMesh({ name: 'x', color: '#555', mesh, dims: { w: 0.03, d: 0.03, h: 0.03 }, x_mm: 300, y_mm: 0 }));
     expect(far.code).toBe('OUT_OF_REACH');
     expect(rej(reg.createMesh({ name: 'x', color: '#555', mesh: { ...mesh, graspWidthMm: 52 }, dims: { w: 0.052, d: 0.03, h: 0.03 } })).code).toBe('TOO_WIDE');
+  });
+
+  it('spacing, the bin keep-out and restZ use the measured footprint radius dims.r', () => {
+    const mesh: MeshInfo = { program: { name: 'rock', category: 'asteroid', parts: [] }, graspWidthMm: 30, heightMm: 20, massG: 30, scale: 1, source: 'gemini' };
+    // a 30 x 30 mm rock whose surface reaches 16 mm from its centre (its bounding box corners: 21.2 mm)
+    const rock = { w: 0.03, d: 0.03, h: 0.02, r: 0.016 };
+    const box = { w: 0.03, d: 0.03, h: 0.02 };
+    expect(sampleRadius(rock)).toBe(0.016);
+    expect(sampleRadius(box)).toBeCloseTo(0.0212, 4);
+    // two of them 45 mm apart: clear by the footprint (16 + 16 + 10 = 42 mm), not by the bounding circle (52 mm)
+    const [ax, ay] = polarXY(0.165, 0.5);
+    const [bx, by] = polarXY(0.165, 0.5 + 2 * Math.asin(0.0225 / 0.165));
+    const at = (x: number, y: number) => ({ x_mm: x * 1000, y_mm: y * 1000 });
+    const reg = new SampleRegistry({ noSeed: true });
+    const a = reg.createMesh({ name: 'a', color: '#555', mesh, dims: rock, ...at(ax, ay) });
+    expect(a.ok && a.sample.dims).toEqual(rock);
+    expect(reg.createMesh({ name: 'b', color: '#555', mesh, dims: rock, ...at(bx, by) }).ok).toBe(true);
+    const old = new SampleRegistry({ noSeed: true });
+    expect(old.createMesh({ name: 'a', color: '#555', mesh, dims: box, ...at(ax, ay) }).ok).toBe(true);
+    expect(rej(old.createMesh({ name: 'b', color: '#555', mesh, dims: box, ...at(bx, by) })).code).toBe('TOO_CLOSE');
+    // 68 mm beside the bin centre: clear of its keep-out by the footprint (50 + 16), not by the bounding circle (50 + 21.2)
+    const [kx, ky] = [CONTAINMENT_XY[0] + 0.068, CONTAINMENT_XY[1]];
+    expect(new SampleRegistry({ noSeed: true }).createMesh({ name: 'k', color: '#555', mesh, dims: rock, ...at(kx, ky) }).ok).toBe(true);
+    expect(rej(new SampleRegistry({ noSeed: true }).createMesh({ name: 'k', color: '#555', mesh, dims: box, ...at(kx, ky) })).code).toBe('ON_CONTAINMENT');
+    // a part released 31 mm from a (toward the arm): beside it by the footprint, on top of it by the bounding circle
+    const [px, py] = polarXY(0.165 - 0.031, 0.5);
+    expect(reg.restZ({ id: 'p', dims: rock }, px, py).on).toBe('deck');
+    expect(old.restZ({ id: 'p', dims: box }, px, py).on).toBe('sample');
+    // r is kept to what the extents allow, and junk is dropped
+    const fresh = () => new SampleRegistry({ noSeed: true });
+    const dimsOf = (r: unknown) => {
+      const c = fresh().createMesh({ name: 'r', color: '#555', mesh, dims: { w: 0.03, d: 0.02, h: 0.02, r: r as number }, ...at(ax, ay) });
+      if (!c.ok) throw new Error(c.reason);
+      return c.sample.dims;
+    };
+    expect(dimsOf(0.001).r).toBe(0.015);
+    expect(dimsOf(0.5).r).toBeCloseTo(Math.hypot(0.03, 0.02) / 2, 12);
+    expect(dimsOf(Number.NaN)).toEqual({ w: 0.03, d: 0.02, h: 0.02 });
+    expect(dimsOf(-1)).toEqual({ w: 0.03, d: 0.02, h: 0.02 });
   });
 
   it('restZ: deck, containment floor, and the top of the sample below', () => {

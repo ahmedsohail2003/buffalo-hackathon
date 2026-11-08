@@ -21,8 +21,10 @@ export interface Sample {
   /**
    * Extents in the sample's local frame, metres. The jaw always closes along local +x, so
    * w is the width the gripper holds, d is the depth along the fingers and h is the height.
+   * r, when present, is the measured footprint radius: the largest horizontal distance of the part
+   * from pos (fabricated meshes). Spacing and the containment bin use it instead of hypot(w, d) / 2.
    */
-  dims: { w: number; d: number; h: number };
+  dims: { w: number; d: number; h: number; r?: number };
   /** centre of the bounding box, bay frame, metres (z = h/2 when resting on the deck) */
   pos: Vec3;
   /** rotation about z, radians */
@@ -61,13 +63,22 @@ export interface MeshInfo {
   assetId?: string;
 }
 
-/** Where to put a new sample. Absolute xy, or relative to a sample id, 'containment' or 'arm'. */
+/**
+ * Where to put a sample. Absolute xy; or relative to a sample id, 'containment' or 'arm'; or a deck
+ * region (side); or nothing, for the best free spot. The first of these that is given wins.
+ */
 export interface Placement {
   x_mm?: number;
   y_mm?: number;
   relative_to?: string;
   direction?: 'left' | 'right' | 'front' | 'behind';
   distance_mm?: number;
+  /**
+   * A deck region, bay frame: left is -x, right +x, front farther from the base (rho >= 170 mm),
+   * behind nearer it (rho <= 160 mm), center within 20 degrees of straight ahead. Code picks the
+   * best free spot there.
+   */
+  side?: 'left' | 'right' | 'front' | 'behind' | 'center';
 }
 
 export type Rejection = { ok: false; code: string; reason: string; suggestion?: string };
@@ -79,8 +90,15 @@ export interface SampleApi {
   get(id: string): Sample | undefined;
   /** A primitive part (box / cylinder / sphere), sizes in mm. Validated against grip, height and reach. */
   createPrimitive(spec: { name?: string; color: string; kind: 'box' | 'cylinder' | 'sphere'; width_mm: number; depth_mm?: number; height_mm: number } & Placement, by?: Sample['createdBy']): CreateResult;
-  /** A measured mesh sample (the fabricator has already built, measured and scaled it). */
-  createMesh(input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number } } & Placement, by?: Sample['createdBy']): CreateResult;
+  /** A measured mesh sample (the fabricator has already built, measured and scaled it). dims.r: footprint radius, metres. */
+  createMesh(input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number; r?: number } } & Placement, by?: Sample['createdBy']): CreateResult;
+  /**
+   * A free, checked deck spot for an existing sample, which may be held (it never blocks itself).
+   * x_mm/y_mm is checked as given; relative_to + direction (+ distance_mm) is resolved, then checked;
+   * side gives the best free spot in that region; no placement gives the best free spot anywhere.
+   * xy is bay frame, metres, ready for arm.placeAt.
+   */
+  findSpot(id: string, placement?: Placement): { ok: true; xy: [number, number] } | Rejection;
   remove(id: string): boolean;
   reset(): void;
   onChange(cb: () => void): () => void;
@@ -88,9 +106,10 @@ export interface SampleApi {
 
 export type PrimCode = 'REJECTED_STATE' | 'UNREACHABLE' | 'NO_SAMPLE' | 'ALREADY_HELD' | 'NOTHING_HELD' | 'GRASP_MISSED' | 'ABORTED';
 
+/** On a refusal, suggestion (when present) says what to try instead, e.g. the nearest free spot: "try (-120, -60) mm". */
 export type MoveResult =
   | { ok: true; tcp_mm: Vec3; held: string | null }
-  | { ok: false; code: PrimCode; reason: string };
+  | { ok: false; code: PrimCode; reason: string; suggestion?: string };
 
 export interface ArmSnapshot {
   /** joint values, radians: shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper */

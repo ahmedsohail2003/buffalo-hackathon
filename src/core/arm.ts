@@ -23,6 +23,7 @@ import {
   bearingOf,
   graspOffset,
   graspZ,
+  inContainment,
   jawForGap,
   jawForWidth,
   polarXY,
@@ -30,7 +31,7 @@ import {
 } from './constants';
 import { IK_TOL, IkSolver, wrapPi, type IkResult } from './ik';
 import { ArmModel, NUM_JOINTS } from './model';
-import { SampleRegistry, gripWidthMm, sampleRadius } from './samples';
+import { SampleRegistry, gripWidthMm, sampleRadius, spotSuggestion } from './samples';
 import { GateError } from './gate';
 
 export type ArmLog = (text: string, kind: 'info' | 'safety' | 'reject') => void;
@@ -45,8 +46,8 @@ export interface ArmOptions {
   servoGain?: number;
 }
 
-type Fail = { ok: false; code: PrimCode; reason: string };
-const fail = (code: PrimCode, reason: string): Fail => ({ ok: false, code, reason });
+type Fail = { ok: false; code: PrimCode; reason: string; suggestion?: string };
+const fail = (code: PrimCode, reason: string, suggestion?: string): Fail => (suggestion ? { ok: false, code, reason, suggestion } : { ok: false, code, reason });
 const mmStr = (m: number): string => `${Math.round(m * 1000)} mm`;
 
 interface Segment {
@@ -590,19 +591,26 @@ export class Arm implements ArmApi {
     };
   }
 
-  /** reasons a held sample cannot be put down at xy (deck placement) */
+  /**
+   * Reasons a held sample cannot be put down at xy (deck placement). A refusal for the bin wall or for
+   * spacing names the nearest free deck spot, so the next try can succeed.
+   */
   private checkPlaceSpot(s: Sample, xy: [number, number]): Fail | null {
     const [x, y] = xy;
     const r = rhoOf(x, y);
     if (r < REACH.rhoMin || r > REACH.rhoMax || Math.abs(bearingOf(x, y)) > REACH.bearingMax) return this.unreachable('that spot', x, y);
+    const near = (): string | undefined => {
+      const spot = this.samples.nearestFreeSpot(s.id, xy);
+      return spot ? spotSuggestion(spot) : undefined;
+    };
     const rest = this.samples.restZ(s, x, y);
-    if (rest.on === 'wall') return fail('UNREACHABLE', `that spot is on the containment bin's wall; place it inside the bin or away from it.`);
+    if (rest.on === 'wall') return fail('UNREACHABLE', `that spot is on the containment bin's wall; place it inside the bin or away from it.`, near());
     const rad = sampleRadius(s.dims);
     if (rest.on !== 'sample') {
       // the whole footprint, not only the centre, must clear the wall: inside the inner face or past the outer one
       const m = Math.max(Math.abs(x - CONTAINMENT_XY[0]), Math.abs(y - CONTAINMENT_XY[1]));
       if (m > CONTAINMENT_INNER / 2 - rad && m < CONTAINMENT_OUTER_HALF + rad) {
-        return fail('UNREACHABLE', `${s.name} would rest across the containment bin's wall there; place it inside the bin or at least ${mmStr(CONTAINMENT_OUTER_HALF + rad)} from the bin centre on each side.`);
+        return fail('UNREACHABLE', `${s.name} would rest across the containment bin's wall there; place it inside the bin or at least ${mmStr(CONTAINMENT_OUTER_HALF + rad)} from the bin centre on each side.`, near());
       }
     }
     if (rest.on === 'deck') {
@@ -610,7 +618,7 @@ export class Arm implements ArmApi {
         if (o.id === s.id || o.held) continue;
         const need = Math.max(MIN_SPACING, rad + sampleRadius(o.dims) + SPACING_EXTRA);
         const d = Math.hypot(x - o.pos[0], y - o.pos[1]);
-        if (d < need - 1e-9) return fail('UNREACHABLE', `that spot is ${mmStr(d)} from ${o.name}; leave at least ${mmStr(need)} between their centres so the jaw has room.`);
+        if (d < need - 1e-9) return fail('UNREACHABLE', `that spot is ${mmStr(d)} from ${o.name}; leave at least ${mmStr(need)} between their centres so the jaw has room.`, near());
       }
     }
     if (rest.on === 'sample') {
@@ -619,7 +627,7 @@ export class Arm implements ArmApi {
       const inner = Math.min(under.dims.w, under.dims.d) / 2;
       if (d > inner) {
         const need = sampleRadius(s.dims) + sampleRadius(under.dims);
-        return fail('UNREACHABLE', `that spot overlaps ${under.name} by ${mmStr(need - d)}; put it right on top or at least ${mmStr(need)} away from its centre.`);
+        return fail('UNREACHABLE', `that spot overlaps ${under.name} by ${mmStr(need - d)}; put it right on top or at least ${mmStr(need)} away from its centre.`, near());
       }
       if (rest.support + s.dims.h > STACK_MAX_H + 1e-9) {
         return fail('UNREACHABLE', `stacking ${s.name} on ${under.name} would make a ${mmStr(rest.support + s.dims.h)} tower, taller than the ${mmStr(STACK_MAX_H)} the arm can carry over.`);
@@ -628,23 +636,50 @@ export class Arm implements ArmApi {
     return null;
   }
 
-  /** a free spot in the bin: the free floor spot nearest the centre, else on top of the centre */
+  /**
+   * A free spot in the bin. Floor spots first, filled from the corners inward (farthest from the
+   * centre first; among equals the two side corners, as far from the arm as the bin centre, before
+   * the corner nearest the base), so two or three samples fit side by side. When the floor is full,
+   * right on top of a sample already in the bin, lowest stack first, within STACK_MAX_H.
+   */
   private containmentSpot(s: Sample): Fail | { xy: [number, number] } {
     const [cx, cy] = CONTAINMENT_XY;
     const lim = CONTAINMENT_INNER / 2 - sampleRadius(s.dims) - 0.002;
-    const cands: [number, number][] = [];
-    for (let dx = -lim; dx <= lim + 1e-9; dx += 0.004) {
-      for (let dy = -lim; dy <= lim + 1e-9; dy += 0.004) cands.push([cx + dx, cy + dy]);
+    // offsets symmetric about the centre, exactly +-lim at the ends, at most 4 mm apart
+    const n = lim > 0 ? Math.ceil(lim / 0.004 - 1e-9) : 0;
+    const offs: number[] = [];
+    for (let i = -n; i <= n; i++) offs.push(n === 0 ? 0 : (i / n) * lim);
+    const rhoC = rhoOf(cx, cy);
+    const um = (m: number) => Math.round(m * 1e6); // micrometres, so mirror-image spots tie exactly
+    const cands: { xy: [number, number]; far: number; dRho: number; rho: number }[] = [];
+    for (const ox of offs) {
+      for (const oy of offs) {
+        const xy: [number, number] = [cx + ox, cy + oy];
+        const rho = rhoOf(xy[0], xy[1]);
+        if (rho < REACH.rhoMin || rho > REACH.rhoMax) continue;
+        cands.push({ xy, far: ox * ox + oy * oy, dRho: um(Math.abs(rho - rhoC)), rho: um(rho) });
+      }
     }
-    cands.push([cx, cy]);
-    cands.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy));
+    // farthest from the centre first, then nearest the bin centre's distance from the arm, then nearer the arm
+    cands.sort((a, b) => b.far - a.far || a.dRho - b.dRho || a.rho - b.rho);
     for (const c of cands) {
-      const r = rhoOf(c[0], c[1]);
-      if (r < REACH.rhoMin || r > REACH.rhoMax) continue;
-      if (this.samples.restZ(s, c[0], c[1]).on === 'containment') return { xy: c };
+      if (this.samples.restZ(s, c.xy[0], c.xy[1]).on === 'containment') return { xy: c.xy };
     }
-    const rest = this.samples.restZ(s, cx, cy);
-    if (rest.on === 'sample' && rest.support + s.dims.h <= STACK_MAX_H) return { xy: [cx, cy] };
+    // the floor is full: stack, centred over a sample in the bin (or over the bin centre if that is on one)
+    const tops: [number, number][] = [[cx, cy]];
+    for (const o of this.samples.list()) if (!o.held && inContainment(o.pos[0], o.pos[1])) tops.push([o.pos[0], o.pos[1]]);
+    let best: { xy: [number, number]; support: number } | null = null;
+    for (const xy of tops) {
+      const rho = rhoOf(xy[0], xy[1]);
+      if (rho < REACH.rhoMin || rho > REACH.rhoMax) continue;
+      const rest = this.samples.restZ(s, xy[0], xy[1]);
+      if (rest.on !== 'sample' || rest.support + s.dims.h > STACK_MAX_H + 1e-9) continue;
+      const under = this.samples.get(rest.underId!)!;
+      // right on top: the centre over the face of the sample it would rest on
+      if (Math.hypot(xy[0] - under.pos[0], xy[1] - under.pos[1]) > Math.min(under.dims.w, under.dims.d) / 2) continue;
+      if (!best || rest.support < best.support - 1e-9) best = { xy, support: rest.support };
+    }
+    if (best) return { xy: best.xy };
     return fail('UNREACHABLE', `the containment bin is full; there is no room for ${s.name}.`);
   }
 

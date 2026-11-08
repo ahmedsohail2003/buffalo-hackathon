@@ -24,6 +24,7 @@ import {
   ATTACH_BAND,
   ATTACH_XY_TOL,
   bearingOf,
+  polarXY,
   rhoOf,
 } from './constants';
 
@@ -41,6 +42,7 @@ export type ValidationCode =
   | 'ON_CONTAINMENT'
   | 'TOO_CLOSE'
   | 'BAY_FULL'
+  | 'NO_SPOT'
   | 'UNREACHABLE';
 
 /** Optional IK probe the factory injects: can the arm hover, grasp and lift a sample here? */
@@ -57,13 +59,73 @@ export interface RegistryOptions {
 const mm = (m: number): string => `${Math.round(m * 1000)} mm`;
 const deg = (r: number): string => `${Math.round((r * 180) / Math.PI)} degrees`;
 
+/**
+ * Where the registry looks for a free deck spot, in order: the five SLOTS, then the whole reach band,
+ * rho 140-190 mm in 10 mm steps by bearings -80 to +80 degrees in 5 degree steps, nearest straight
+ * ahead first, then nearest the 165 mm arc (then right before left, outer before inner). Every spot
+ * still goes through checkSpot: reach, the bin keep-out, spacing and the IK probe.
+ */
+export const SEARCH_SPOTS: readonly [number, number][] = (() => {
+  const band: { rho: number; bearing: number }[] = [];
+  for (let rho = 140; rho <= 190; rho += 10) for (let bearing = -80; bearing <= 80; bearing += 5) band.push({ rho, bearing });
+  band.sort((a, b) => Math.abs(a.bearing) - Math.abs(b.bearing) || Math.abs(a.rho - 165) - Math.abs(b.rho - 165) || b.bearing - a.bearing || b.rho - a.rho);
+  return [...SLOTS, ...band.map((s) => polarXY(s.rho / 1000, (s.bearing * Math.PI) / 180))];
+})();
+
+export type DeckSide = NonNullable<Placement['side']>;
+export const DECK_SIDES: readonly DeckSide[] = ['left', 'right', 'front', 'behind', 'center'];
+const SIDE_WHERE: Record<DeckSide, string> = {
+  left: 'on the left of the deck',
+  right: 'on the right of the deck',
+  front: 'at the front of the deck',
+  behind: 'at the back of the deck',
+  center: 'in the middle of the deck',
+};
+
+/**
+ * Deck regions, bay frame: left is -x, right +x, front farther from the base (rho >= 170 mm), behind
+ * nearer it (rho <= 160 mm), center within 20 degrees of straight ahead.
+ */
+export function onDeckSide(x: number, y: number, side: DeckSide): boolean {
+  const eps = 1e-9;
+  switch (side) {
+    case 'left':
+      return x < -eps;
+    case 'right':
+      return x > eps;
+    case 'front':
+      return rhoOf(x, y) >= 0.17 - eps;
+    case 'behind':
+      return rhoOf(x, y) <= 0.16 + eps;
+    case 'center':
+      return Math.abs(bearingOf(x, y)) <= (20 * Math.PI) / 180 + eps;
+  }
+}
+
 function reject(code: ValidationCode | string, reason: string, suggestion?: string): Rejection {
   return suggestion ? { ok: false, code, reason, suggestion } : { ok: false, code, reason };
 }
 
-/** bounding-circle radius used for spacing: hypot(w, d) / 2 */
-export function sampleRadius(dims: { w: number; d: number }): number {
-  return Math.hypot(dims.w, dims.d) / 2;
+/** a refusal's suggestion naming a free deck spot, in mm: "try (-120, -60) mm" */
+export function spotSuggestion(xy: readonly [number, number]): string {
+  const r = (m: number) => Math.round(m * 1000) || 0;
+  return `try (${r(xy[0])}, ${r(xy[1])}) mm`;
+}
+
+/** footprint radius used for spacing and the bin: the measured dims.r, else the bounding circle hypot(w, d) / 2 */
+export function sampleRadius(dims: { w: number; d: number; r?: number }): number {
+  const r = dims.r;
+  return typeof r === 'number' && Number.isFinite(r) && r > 0 ? r : Math.hypot(dims.w, dims.d) / 2;
+}
+
+/**
+ * A measured footprint radius, kept to what the extents allow: no part reaches less than max(w, d) / 2
+ * or more than hypot(w, d) / 2 from its bounding-box centre. Undefined when missing or not a number.
+ */
+function footprintRadius(dims: { w: number; d: number; r?: number }): number | undefined {
+  const r = dims.r;
+  if (typeof r !== 'number' || !Number.isFinite(r) || r <= 0) return undefined;
+  return Math.min(Math.hypot(dims.w, dims.d) / 2, Math.max(Math.max(dims.w, dims.d) / 2, r));
 }
 
 /** grip width (mm) the jaw closes on: the measured mesh width, or dims.w */
@@ -156,7 +218,18 @@ export class SampleRegistry implements SampleApi {
 
   // ---------- validation ----------
 
-  private resolvePlacement(p: Placement, dims: { w: number; d: number; h: number }, gripMm: number): { x: number; y: number } | Rejection {
+  /**
+   * Where a placement points, for a part of these dims; ignoreId (a sample being moved) never blocks
+   * the search. what names the part in refusals.
+   */
+  private resolvePlacement(
+    p: Placement,
+    dims: Sample['dims'],
+    gripMm: number,
+    yaw = 0,
+    ignoreId: string | null = null,
+    what = 'a part this size',
+  ): { x: number; y: number } | Rejection {
     const hasXY = p.x_mm !== undefined || p.y_mm !== undefined;
     if (hasXY) {
       if (!Number.isFinite(p.x_mm) || !Number.isFinite(p.y_mm)) {
@@ -190,15 +263,58 @@ export class SampleRegistry implements SampleApi {
       }
       return { x: base[0] + v[dir][0] * dist, y: base[1] + v[dir][1] * dist };
     }
-    // first free slot that passes every check
-    for (const [x, y] of SLOTS) {
-      if (this.checkSpot(x, y, dims, gripMm, 0, null) === null) return { x, y };
+    const side = p.side;
+    if (side !== undefined && !(DECK_SIDES as readonly string[]).includes(side)) {
+      return reject('BAD_PLACEMENT', 'say which part of the deck to use: left, right, front, behind or center.', 'side: left, right, front, behind or center');
     }
-    return reject('BAY_FULL', 'none of the default spots is free for a part this size.', 'give x_mm and y_mm inside the reach band, or remove a sample');
+    // the first spot that passes every check: the slots, then the rest of the reach band
+    for (const [x, y] of SEARCH_SPOTS) {
+      if (side && !onDeckSide(x, y, side)) continue;
+      if (this.checkSpot(x, y, dims, gripMm, yaw, ignoreId) === null) return { x, y };
+    }
+    if (side) return reject('NO_SPOT', `there is no free spot ${SIDE_WHERE[side]} for ${what}.`, 'try another side, or leave the side out for any free spot');
+    return reject('BAY_FULL', `there is no free spot on the deck for ${what}.`, 'stow a sample in containment first');
+  }
+
+  /**
+   * A free, checked deck spot for an existing sample, which may be held: it never blocks itself.
+   * x_mm/y_mm is checked as given, relative_to + direction is resolved and checked, side is the first
+   * free spot of the search in that region, and no placement the first free spot anywhere.
+   */
+  findSpot(id: string, placement: Placement = {}): { ok: true; xy: [number, number] } | Rejection {
+    const s = this.resolve(String(id));
+    if (!s) return reject('NO_SAMPLE', `there is no sample called ${id} in the bay.`, 'use the id of a sample in the bay');
+    const grip = gripWidthMm(s);
+    const at = this.resolvePlacement(placement ?? {}, s.dims, grip, s.yaw, s.id, s.name);
+    if ('ok' in at) return at;
+    const bad = this.checkSpot(at.x, at.y, s.dims, grip, s.yaw, s.id);
+    if (bad) {
+      // crowded or on the bin: name the nearest free spot, so one more call recovers
+      const near = bad.code === 'TOO_CLOSE' || bad.code === 'ON_CONTAINMENT' ? this.nearestFreeSpot(s.id, [at.x, at.y]) : null;
+      return near ? { ...bad, suggestion: spotSuggestion(near) } : bad;
+    }
+    return { ok: true, xy: [at.x, at.y] };
+  }
+
+  /**
+   * The free spot of the search (slots and reach band) nearest to xy for an existing sample, which may
+   * be held (it never blocks itself); null when none is free. Rounded to the millimetre, and checked
+   * as rounded, so a suggestion that names it in mm is a spot that passes.
+   */
+  nearestFreeSpot(id: string, xy: [number, number]): [number, number] | null {
+    const s = this.resolve(String(id));
+    if (!s) return null;
+    const grip = gripWidthMm(s);
+    const d = (p: readonly [number, number]) => Math.hypot(p[0] - xy[0], p[1] - xy[1]);
+    for (const p of [...SEARCH_SPOTS].sort((a, b) => d(a) - d(b))) {
+      const q: [number, number] = [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000];
+      if (this.checkSpot(q[0], q[1], s.dims, grip, s.yaw, s.id) === null) return q;
+    }
+    return null;
   }
 
   /** placement checks shared by createPrimitive and createMesh; null when the spot is fine */
-  checkSpot(x: number, y: number, dims: { w: number; d: number; h: number }, gripMm: number, yaw: number, ignoreId: string | null): Rejection | null {
+  checkSpot(x: number, y: number, dims: Sample['dims'], gripMm: number, yaw: number, ignoreId: string | null): Rejection | null {
     const r = rhoOf(x, y);
     const b = bearingOf(x, y);
     if (r < REACH.rhoMin || r > REACH.rhoMax) {
@@ -295,13 +411,15 @@ export class SampleRegistry implements SampleApi {
   }
 
   createMesh(
-    input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number } } & Placement,
+    input: { name: string; color: string; mesh: MeshInfo; dims: { w: number; d: number; h: number; r?: number } } & Placement,
     by: Sample['createdBy'] = 'gemini',
   ): CreateResult {
-    const dims = input.dims;
-    if (!dims || ![dims.w, dims.d, dims.h].every((v) => Number.isFinite(v) && v > 0 && v < 0.2)) {
+    const given = input.dims;
+    if (!given || ![given.w, given.d, given.h].every((v) => Number.isFinite(v) && v > 0 && v < 0.2)) {
       return reject('BAD_SIZE', 'the fabricated part has no valid size.', 'measure the part again');
     }
+    const r = footprintRadius(given);
+    const dims = { w: given.w, d: given.d, h: given.h, ...(r !== undefined ? { r } : {}) };
     const grip = input.mesh?.graspWidthMm;
     if (!Number.isFinite(grip)) return reject('BAD_SIZE', 'the fabricated part has no measured grip width.', 'measure the part again');
     if (grip > GRIP_MAX_MM) {

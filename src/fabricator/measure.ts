@@ -11,6 +11,11 @@ export interface Measured {
   w: number;
   d: number;
   h: number;
+  /**
+   * footprint radius, metres: the largest horizontal distance of the part from its bounding-box centre
+   * (the point a sample's pos names), so the same at every yaw and never more than hypot(w, d) / 2
+   */
+  r: number;
   /** narrowest width across the jaw axis over all yaws (fingertip band), mm */
   graspWidthMm: number;
   /** yaw (rad, [0, pi)) of the direction that narrowest width lies along */
@@ -128,6 +133,7 @@ export function measureGeometry(g: BufferGeometry, densityGcm3: number): Measure
   const volumeCm3 = v * 1e6;
   return {
     w, d, h,
+    r: Math.sqrt(r2),
     graspWidthMm: best * 1000,
     graspYaw: bestT,
     widthAlongXMm: alongX * 1000,

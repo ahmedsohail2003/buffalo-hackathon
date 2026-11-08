@@ -37,6 +37,7 @@ function memoryBay(): BayApi {
       list.push(s);
       return { ok: true, sample: s };
     },
+    findSpot: () => ({ ok: false, code: 'UNSUPPORTED', reason: 'preview' }),
     remove: () => false, reset: () => { list.length = 0; }, onChange: () => () => undefined,
   };
   const ok = async () => ({ ok: true as const, tcp_mm: [0, 0, 0] as [number, number, number], held: null });
