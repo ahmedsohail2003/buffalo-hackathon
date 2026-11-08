@@ -311,6 +311,14 @@ describe('tools: a camera check first moves an empty, idle arm clear of the view
     expect(fns(busy)).toEqual(['capture']);
   });
 
+  it('the declarations tell the model a camera check may first send an idle arm home', () => {
+    for (const name of ['check_bay', 'point_at']) {
+      const d = TOOL_DECLARATIONS.find((x) => x.name === name)?.description ?? '';
+      expect(d).not.toContain('Read-only');
+      expect(d).toMatch(/while the bay is RUNNING, an idle, empty arm parked over .* moves home first/);
+    }
+  });
+
   it('never moves while holding: the result and its summary say the gripper may hide the sample', async () => {
     const bay = makeFakeBay({ samples: [cubeSeed, itokawaSeed] });
     await bay.arm.pick('sample_3'); // the gripper is right above Itokawa, holding it
