@@ -414,13 +414,25 @@ export function formatArgs(a: Record<string, unknown>): string {
     .join(', ');
 }
 
+/**
+ * check_bay leads with the decision, then the camera: "yes (registry decides); camera says no: <observation>",
+ * or "no (camera decides): <observation>" when only the camera could answer.
+ */
+function checkBaySummary(r: ToolResult): string {
+  const answer = String(r.answer);
+  const obs = String(r.observation ?? '').trim();
+  const head =
+    r.decided_by === 'code'
+      ? `${r.ok ? 'yes' : 'no'} (registry decides); ${answer === 'unsure' ? 'camera is unsure' : `camera says ${answer}`}`
+      : `${answer} (camera decides)`;
+  return obs ? `${head}: ${obs}` : head;
+}
+
 /** One short line for the log, the chat and the Live [BAY EVENT] messages. */
 export function summarizeResult(name: string, r: ToolResult): string {
   if (!r.ok) {
     const reason = typeof r.reason === 'string' ? r.reason : 'refused';
-    if (name === 'check_bay' && 'answer' in r) {
-      return `${String(r.answer)}${r.decided_by === 'code' ? ' (registry decides: no)' : ''}${r.agree === false ? ' - camera disagrees' : ''}: ${String(r.observation ?? '')}`.trim();
-    }
+    if (name === 'check_bay' && 'answer' in r) return checkBaySummary(r);
     if (name === 'point_at' && !('code' in r)) return `not found: ${reason}`;
     return `refused (${String(r.code ?? 'ERROR')}): ${reason}`;
   }
@@ -446,7 +458,7 @@ export function summarizeResult(name: string, r: ToolResult): string {
       return s ? `ok, ${s.name} (${s.id}): grip ${s.grip_width_mm} mm, height ${s.height_mm} mm${s.mass_g !== undefined ? `, ${s.mass_g} g` : ''}` : 'ok';
     }
     case 'check_bay':
-      return `${String(r.answer)}${r.decided_by === 'code' ? ' (registry decides)' : ''}${r.agree === false ? ' - camera disagrees' : ''}: ${String(r.observation ?? '')}`.trim();
+      return checkBaySummary(r);
     case 'point_at': {
       const m = r.match as { name: string; error_mm: number | null } | undefined;
       const p = r.bay_mm as number[] | null | undefined;

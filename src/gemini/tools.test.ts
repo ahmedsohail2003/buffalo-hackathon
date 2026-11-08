@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LogLine } from '../contracts';
 import { fakeProject, makeFakeBay, makeSample } from './__fixtures__/fakeBay';
 import type { CallFn, CallResult } from './client';
-import { MOVING_TOOLS, TOOL_DECLARATIONS, dispatchTool, liveToolDeclarations, type ToolContext } from './tools';
+import { MOVING_TOOLS, TOOL_DECLARATIONS, dispatchTool, liveToolDeclarations, summarizeResult, type ToolContext } from './tools';
 import type { FabricateFn } from './types';
 
 const bennu = makeSample({
@@ -214,6 +214,33 @@ describe('tools: check_bay and point_at take a sample_id', () => {
       expect(r).toMatchObject({ ok: true, match: { id: 'sample_2' } });
       expect((r.match as { error_mm: number }).error_mm).toBeGreaterThan(100);
     }
+  });
+});
+
+describe('tools: the check_bay summary leads with the decision', () => {
+  it('registry decisions read "<decision> (registry decides); camera says <answer>: <observation>", the same in both branches', () => {
+    const obs = 'The cube is held by the gripper above the bin.';
+    expect(summarizeResult('check_bay', { ok: true, answer: 'no', observation: obs, decided_by: 'code', agree: false })).toBe(
+      `yes (registry decides); camera says no: ${obs}`,
+    );
+    expect(summarizeResult('check_bay', { ok: false, answer: 'yes', observation: 'It sits in the bin.', decided_by: 'code', agree: false })).toBe(
+      'no (registry decides); camera says yes: It sits in the bin.',
+    );
+    expect(summarizeResult('check_bay', { ok: true, answer: 'yes', observation: 'It sits in the bin.', decided_by: 'code', agree: true })).toBe(
+      'yes (registry decides); camera says yes: It sits in the bin.',
+    );
+    expect(summarizeResult('check_bay', { ok: true, answer: 'unsure', observation: 'The arm hides the bin.', decided_by: 'code' })).toBe(
+      'yes (registry decides); camera is unsure: The arm hides the bin.',
+    );
+    expect(summarizeResult('check_bay', { ok: false, answer: 'no', observation: 'The arm is still.', decided_by: 'camera' })).toBe('no (camera decides): The arm is still.');
+    expect(summarizeResult('check_bay', { ok: true, answer: 'yes', observation: '', decided_by: 'camera' })).toBe('yes (camera decides)');
+  });
+
+  it('the log line shows the registry decision first', async () => {
+    const bay = makeFakeBay({ samples: [bennu] });
+    const { c, lines } = ctx({ call: async () => ({ text: '{"answer":"no","observation":"The bin looks empty."}' }) as CallResult, inContainment: () => true });
+    await dispatchTool(bay, 'check_bay', { question: 'Is the Bennu fragment inside the containment bin?' }, 'coworker', c);
+    expect(lines[1].text).toBe('[coworker] check_bay -> yes (registry decides); camera says no: The bin looks empty.');
   });
 });
 
