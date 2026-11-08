@@ -44,6 +44,7 @@ const VOICE_LABEL: Record<LiveState, string> = {
   listening: 'listening',
   thinking: 'thinking',
   speaking: 'speaking',
+  working: 'working', // shown as "working: <tool>" while a long tool runs
   error: 'voice error',
 };
 
@@ -230,7 +231,8 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
     void live.connect();
   };
 
-  const disconnect = () => {
+  const disconnect = (e?: { detail?: number }) => {
+    if ((e?.detail ?? 0) > 1) return; // the second click of a double click on "Connect voice" lands here
     liveRef.current?.disconnect();
     liveRef.current = null;
     setTalking(false);
@@ -292,7 +294,7 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
             style={{ ...s.chip, color: voice.state === 'error' ? c.bad : voiceUp ? c.good : c.dim }}
             title={voice.detail || undefined}
           >
-            {VOICE_LABEL[voice.state]}
+            {voice.state === 'working' && voice.detail ? `${VOICE_LABEL.working}: ${voice.detail}` : VOICE_LABEL[voice.state]}
           </span>
         </span>
       </header>

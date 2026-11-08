@@ -1,20 +1,47 @@
-import { describe, expect, it } from 'vitest';
-import type { GeminiCallEntry } from '../contracts';
+import { describe, expect, it, vi } from 'vitest';
+import type { GeminiCallEntry, LogLine } from '../contracts';
+import { calloutLogText, startAnnouncer } from '../voice';
 import type { SpeakerLike } from '../voice/elevenSpeaker';
 import { makeFakeBay, makeSample } from './__fixtures__/fakeBay';
-import { LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
+import { LIVE_PROMPT, LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
 import type { ToolContext } from './tools';
+import type { LogSink } from './types';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
+/** Let promise chains and zero-delay timers run out. */
+const settle = async (n = 6) => {
+  for (let i = 0; i < n; i++) await tick();
+};
 
-function rig(opts: { state?: 'RUNNING' | 'STOPPED' } = {}) {
+/** 40 ms of 16 kHz PCM: a sine of the given peak amplitude (full scale 32767). */
+function tone(peak: number, samples = 640): Int16Array {
+  return Int16Array.from({ length: samples }, (_, i) => Math.round(peak * Math.sin((2 * Math.PI * 440 * i) / 16_000)));
+}
+/** about -13 dBFS: speech */
+const LOUD = tone(9000);
+/** about -53 dBFS: room noise, below the speech threshold */
+const NOISE = tone(100);
+const b64 = (pcm: Int16Array) => Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString('base64');
+/** what went over a socket, one word per message: activityStart, audio, activityEnd, client, tool */
+const kinds = (sent: Array<[string, Record<string, unknown>]>) => sent.map(([k, p]) => (k === 'realtime' ? Object.keys(p)[0] : k));
+const audioSent = (sent: Array<[string, Record<string, unknown>]>) =>
+  sent.filter(([k, p]) => k === 'realtime' && 'audio' in p).map(([, p]) => (p.audio as { data: string }).data);
+
+/** What the fake server does with one socket: set it up, hold setup until released, or never set it up. */
+type SocketPlan = 'open' | 'hold' | 'never' | ((cb: LiveCallbacksLite) => void);
+
+function rig(opts: { state?: 'RUNNING' | 'STOPPED' | 'IDLE'; holdMic?: boolean; tailMs?: number; now?: () => number } = {}) {
   const bay = makeFakeBay({ samples: [makeSample({ id: 's1', name: 'Bennu fragment', pos: [0, -0.165, 0.012] })], state: opts.state });
   const sessions: Array<LiveSessionLike & { sent: Array<[string, Record<string, unknown>]>; closed: boolean }> = [];
   const configs: Array<Record<string, unknown>> = [];
   const callbacks: LiveCallbacksLite[] = [];
-  const connector: LiveConnector = async (config, cb) => {
+  const signals: Array<AbortSignal | undefined> = [];
+  const plans: SocketPlan[] = [];
+  const held: Array<() => void> = [];
+  const connector: LiveConnector = async (config, cb, signal) => {
     configs.push(config);
     callbacks.push(cb);
+    signals.push(signal);
     const sent: Array<[string, Record<string, unknown>]> = [];
     const s = {
       sent,
@@ -27,14 +54,29 @@ function rig(opts: { state?: 'RUNNING' | 'STOPPED' } = {}) {
       },
     };
     sessions.push(s);
+    const plan = plans.shift() ?? 'open';
+    if (plan === 'hold') await new Promise<void>((r) => held.push(r));
+    if (plan === 'never') return new Promise<never>(() => {});
+    if (typeof plan === 'function') {
+      plan(cb); // the server acts before setup completes, which then never comes (as in the SDK)
+      return new Promise<never>(() => {});
+    }
     return s;
   };
   let micCb: ((p: Int16Array) => void) | null = null;
+  const micState = { starts: 0, stops: 0, running: false };
+  const micWaiters: Array<() => void> = [];
   const mic: MicLike = {
     start: async (cb) => {
+      micState.starts++;
+      if (opts.holdMic) await new Promise<void>((r) => micWaiters.push(r));
       micCb = cb;
+      micState.running = true;
     },
-    stop: () => {},
+    stop: () => {
+      micState.stops++;
+      micState.running = false;
+    },
   };
   const played: number[] = [];
   let playerStops = 0;
@@ -52,10 +94,43 @@ function rig(opts: { state?: 'RUNNING' | 'STOPPED' } = {}) {
     broken: false,
   };
   const entries: GeminiCallEntry[] = [];
-  const live = new LiveVoice({ bay, speaker, connector, mic, player, tailMs: 0, recordEntry: (e) => void entries.push(e) });
+  const logs: string[] = [];
+  const sink: LogSink = { log: (l) => void logs.push(`${l.kind}:${l.text}`), ledger: () => {} };
+  const live = new LiveVoice({ bay, sink, speaker, connector, mic, player, tailMs: opts.tailMs ?? 0, ...(opts.now ? { now: opts.now } : {}), recordEntry: (e) => void entries.push(e) });
+  const states: string[] = [];
+  const transcripts: string[] = [];
+  const toolLines: string[] = [];
+  live.events = {
+    onState: (st, detail) => void states.push(detail ? `${st}: ${detail}` : st),
+    onTranscript: (who, text) => void transcripts.push(`${who}:${text}`),
+    onTool: (line) => void toolLines.push(line),
+  };
   const server = (i = callbacks.length - 1) => callbacks[i];
   const lastSent = () => sessions[sessions.length - 1].sent;
-  return { bay, live, sessions, configs, server, lastSent, mic: (p: Int16Array) => micCb?.(p), played, playerStops: () => playerStops, spoken, entries };
+  return {
+    bay,
+    live,
+    sessions,
+    configs,
+    signals,
+    plans,
+    /** let a held socket finish its setup */
+    openSocket: () => held.shift()?.(),
+    server,
+    lastSent,
+    mic: (p: Int16Array) => micCb?.(p),
+    micState,
+    releaseMic: () => micWaiters.splice(0).forEach((r) => r()),
+    played,
+    playerStops: () => playerStops,
+    spoken,
+    entries,
+    logs,
+    voiceLogs: () => logs.filter((l) => l.startsWith('voice:')).map((l) => l.slice('voice:'.length)),
+    states,
+    transcripts,
+    toolLines,
+  };
 }
 
 describe('Live config', () => {
@@ -74,6 +149,22 @@ describe('Live config', () => {
     expect(JSON.stringify(cfg.systemInstruction)).toContain('[BAY EVENT]');
   });
 
+  it('the prompt keeps CAPCOM in English, factual, prompt to acknowledge long tools, and honest about an idle bay', () => {
+    const text = (buildLiveConfig().systemInstruction as { parts: Array<{ text: string }> }).parts[0].text;
+    expect(text).toBe(LIVE_PROMPT);
+    const line = (re: RegExp) => LIVE_PROMPT.split('\n').find((l) => re.test(l)) ?? '';
+    expect(line(/English/)).toMatch(/^Always answer in English\./);
+    expect(line(/Say again/)).toBe('If you did not hear a clear request from the operator, say "Say again?" and nothing else.');
+    expect(line(/Report only facts/)).toMatch(/tool results, \[BAY EVENT\] messages/);
+    const ack = line(/acknowledgement/);
+    for (const tool of ['point_at', 'check_bay', 'pick_sample', 'place_sample', 'place_in_containment', 'design_sample']) expect(ack).toContain(tool);
+    expect(ack).toMatch(/two-to-four-word acknowledgement such as "Pointing now\."/);
+    const idle = line(/IDLE/);
+    expect(idle).toMatch(/give the cycle start .*and then repeat the request/);
+    expect(idle).toMatch(/Never promise to act later/);
+    expect(idle).not.toMatch(/wait for a \[BAY EVENT\]/); // it used to promise to act once the bay ran
+  });
+
   it('asks the server for a token locked to the config', async () => {
     const seen: Array<{ url: string; body: unknown }> = [];
     const fetchFn = (async (url: string, init: RequestInit) => {
@@ -84,26 +175,69 @@ describe('Live config', () => {
     expect(await fetchLiveToken(cfg, fetchFn)).toEqual({ name: 'auth_tokens/t1', apiVersion: 'v1alpha' });
     expect(seen[0]).toEqual({ url: '/api/gemini/live-token', body: { model: 'gemini-3.8-live', config: cfg } });
     const failing = (async () => new Response(JSON.stringify({ error: 'gemini_unconfigured', message: 'Gemini is not configured.' }), { status: 503 })) as unknown as typeof fetch;
-    await expect(fetchLiveToken(cfg, failing)).rejects.toThrow('Gemini is not configured.');
+    await expect(fetchLiveToken(cfg, failing)).rejects.toThrow('Voice is not available: the server has no Gemini key.');
+  });
+});
+
+describe('Voice token failures in plain words', () => {
+  const reply = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    (async () => new Response(JSON.stringify(body), { status, headers })) as unknown as typeof fetch;
+
+  it('maps the server codes to sentences and keeps retry_after_s', async () => {
+    const cfg = buildLiveConfig();
+    const busy = fetchLiveToken(cfg, reply(429, { error: 'rate_limited', retry_after_s: 7 }, { 'retry-after': '7' }));
+    await expect(busy).rejects.toThrow('Voice is busy: try again in 7 s.');
+    await expect(busy).rejects.toMatchObject({ code: 'rate_limited', retryAfterS: 7 });
+    await expect(fetchLiveToken(cfg, reply(502, { error: 'token_mint_failed', detail: 'upstream said no' }))).rejects.toThrow('The server could not get a voice token.');
+    await expect(fetchLiveToken(cfg, reply(429, { error: 'budget_exhausted', upstream: 'gemini', retry_after_s: 2400 }))).rejects.toThrow(
+      'The server has used its Gemini allowance for now: try again in 40 min.',
+    );
+    await expect(fetchLiveToken(cfg, reply(403, { error: 'model_not_allowed', model: 'x' }))).rejects.toThrow('The server does not allow this voice model.');
+    await expect(fetchLiveToken(cfg, reply(429, {}, { 'retry-after': '12' }))).rejects.toMatchObject({ message: 'The voice token request failed (HTTP 429).', retryAfterS: 12 });
+    const offline = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+    await expect(fetchLiveToken(cfg, offline)).rejects.toThrow('Could not reach the voice server.');
+  });
+
+  it('Connect shows the sentence, not the raw code', async () => {
+    const states: string[] = [];
+    const lines: string[] = [];
+    const live = new LiveVoice({
+      bay: makeFakeBay(),
+      sink: { log: (l) => void lines.push(l.text), ledger: () => {} },
+      connector: async (config, _cb, signal) => {
+        await fetchLiveToken(config, reply(429, { error: 'rate_limited', retry_after_s: 7 }), undefined, signal);
+        throw new Error('this test never opens a socket');
+      },
+      mic: { start: async () => {}, stop() {} },
+      player: { play() {}, stop() {}, resume: async () => {}, setMuted() {} },
+      recordEntry: () => {},
+    });
+    live.events = { onState: (s, d) => void states.push(d ? `${s}: ${d}` : s) };
+    await live.connect();
+    expect(states).toEqual(['connecting', 'error: Voice is busy: try again in 7 s.']);
+    expect(lines).toEqual(['Voice is busy: try again in 7 s.']);
   });
 });
 
 describe('Live voice session', () => {
-  it('hold to talk: barge-in, activity start, 16 kHz audio while held, activity end on release', async () => {
+  it('hold to talk: barge-in, activity start at the first speech, 16 kHz audio while held, activity end on release', async () => {
     const r = rig();
     await r.live.connect();
     expect(r.live.state).toBe('ready');
-    r.mic(new Int16Array([1, 2]));
+    r.mic(LOUD);
     expect(r.lastSent()).toEqual([]); // the mic is open but nothing is sent until TALK
     r.live.startTalk();
     expect(r.spoken).toContain('cancel');
     expect(r.playerStops()).toBeGreaterThan(0);
-    r.mic(new Int16Array([1, -1]));
+    expect(r.live.state).toBe('listening');
+    r.mic(LOUD);
     r.live.endTalk();
-    r.mic(new Int16Array([5, 5]));
+    r.mic(LOUD);
     expect(r.lastSent()).toEqual([
       ['realtime', { activityStart: {} }],
-      ['realtime', { audio: { data: 'AQD//w==', mimeType: 'audio/pcm;rate=16000' } }],
+      ['realtime', { audio: { data: b64(LOUD), mimeType: 'audio/pcm;rate=16000' } }],
       ['realtime', { activityEnd: {} }],
     ]);
     expect(r.live.state).toBe('thinking');
@@ -113,6 +247,7 @@ describe('Live voice session', () => {
     const r = rig();
     await r.live.connect();
     r.live.startTalk();
+    r.mic(LOUD);
     r.live.endTalk();
     const audio = { inlineData: { data: 'AAABAAIA', mimeType: 'audio/pcm;rate=24000' } };
     r.server().onmessage({ serverContent: { outputTranscription: { text: 'Copy, picking ' } } });
@@ -138,6 +273,7 @@ describe('Live voice session', () => {
     const r = rig();
     await r.live.connect();
     r.live.startTalk();
+    r.mic(LOUD);
     r.live.endTalk(); // CAPCOM's turn is now open
     r.server().onmessage({ toolCall: { functionCalls: [{ id: 'call-7', name: 'pick_sample', args: { id: 's1' } }] } });
     await tick();
@@ -223,5 +359,348 @@ describe('Live voice session', () => {
     expect(r.live.state).toBe('error');
     r.live.disconnect();
     expect(r.live.state).toBe('off');
+  });
+});
+
+describe('Live connect races (one attempt wins)', () => {
+  it('Disconnect while the microphone is opening ends off, releases the mic and opens no socket', async () => {
+    const r = rig({ holdMic: true });
+    const connecting = r.live.connect();
+    expect(r.live.state).toBe('connecting');
+    r.live.disconnect();
+    r.releaseMic(); // getUserMedia answers after the Disconnect
+    await connecting;
+    await settle();
+    expect(r.live.state).toBe('off');
+    expect(r.micState.running).toBe(false);
+    expect(r.configs).toHaveLength(0); // no token, no socket
+    expect(r.states).toEqual(['connecting', 'off']); // nothing changes after the Disconnect
+    expect(r.voiceLogs()).toEqual([]);
+  });
+
+  it('Disconnect while the socket is opening ends off; the late socket is closed and its events are ignored', async () => {
+    const r = rig();
+    r.plans.push('hold');
+    const connecting = r.live.connect();
+    await settle();
+    expect(r.configs).toHaveLength(1);
+    r.live.disconnect();
+    expect(r.signals[0]?.aborted).toBe(true); // the connector is told to give up (no token mint, no socket kept)
+    await connecting;
+    r.openSocket(); // setup completes anyway
+    await settle();
+    expect(r.sessions[0].closed).toBe(true);
+    expect(r.live.state).toBe('off');
+    expect(r.micState.running).toBe(false);
+    r.server(0).onmessage({ serverContent: { outputTranscription: { text: 'late words' } } });
+    r.server(0).onclose?.({ code: 1000, reason: 'bye' });
+    await settle();
+    expect(r.transcripts).toEqual([]);
+    expect(r.configs).toHaveLength(1); // the late close is not a renewal
+    expect(r.states).toEqual(['connecting', 'off']);
+    expect(r.voiceLogs()).toEqual([]);
+  });
+
+  it('a double connect opens exactly one link, and that link works', async () => {
+    const r = rig({ holdMic: true });
+    const first = r.live.connect();
+    const second = r.live.connect(); // the second click of a double click
+    r.releaseMic();
+    await Promise.all([first, second]);
+    expect(r.configs).toHaveLength(1);
+    expect(r.micState.starts).toBe(1);
+    expect(r.live.state).toBe('ready');
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk();
+    expect(kinds(r.lastSent())).toEqual(['activityStart', 'audio', 'activityEnd']);
+  });
+
+  it('Connect, Disconnect, Connect: the first attempt neither opens a socket nor stops the second one\'s mic', async () => {
+    const r = rig({ holdMic: true });
+    const first = r.live.connect();
+    r.live.disconnect();
+    const second = r.live.connect();
+    r.releaseMic(); // both getUserMedia calls answer now
+    await Promise.all([first, second]);
+    await settle();
+    expect(r.configs).toHaveLength(1);
+    expect(r.live.state).toBe('ready');
+    expect(r.micState.running).toBe(true);
+    expect(r.states).toEqual(['connecting', 'off', 'connecting', 'ready']);
+    expect(r.voiceLogs()).toEqual(['Voice link up. Hold TALK to speak to CAPCOM.']);
+  });
+
+  it('a Disconnect during a renewal wins: the new socket is closed and nothing says the link is up', async () => {
+    const r = rig();
+    await r.live.connect();
+    r.plans.push('hold');
+    r.server(0).onmessage({ goAway: { timeLeft: '5s' } });
+    await settle();
+    expect(r.configs).toHaveLength(2);
+    r.live.disconnect();
+    r.openSocket();
+    await settle();
+    expect(r.sessions[1].closed).toBe(true);
+    expect(r.live.state).toBe('off');
+    expect(r.states.slice(-1)).toEqual(['off']);
+    expect(r.voiceLogs().some((l) => l.startsWith('Voice link renewed'))).toBe(false);
+  });
+});
+
+describe('Live link refused before setup', () => {
+  it('a socket the server closes before setup fails at once with the reason, releases the mic and is not renewed', async () => {
+    const r = rig();
+    r.plans.push((cb) => setTimeout(() => cb.onclose?.({ code: 1008, reason: 'Quota exceeded for this model' }), 0));
+    void r.live.connect();
+    await settle();
+    const why = 'Voice link refused: quota exceeded for this model (1008).';
+    expect(r.live.state).toBe('error');
+    expect(r.states.slice(-1)).toEqual([`error: ${why}`]);
+    expect(r.voiceLogs()).toEqual([why]);
+    expect(r.micState.running).toBe(false);
+    expect(r.configs).toHaveLength(1); // no "renewal" of a link that never came up
+    await r.live.connect(); // and Connect works again
+    expect(r.live.state).toBe('ready');
+  });
+
+  it('a socket error before setup fails at once in plain words', async () => {
+    const r = rig();
+    r.plans.push((cb) => setTimeout(() => cb.onerror?.({}), 0));
+    void r.live.connect();
+    await settle();
+    expect(r.states.slice(-1)).toEqual(['error: Voice link failed: could not reach the voice server.']);
+    expect(r.micState.running).toBe(false);
+  });
+
+  it('a socket that never finishes setup times out after 12 s, and a late setup is closed', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig();
+      r.plans.push('hold');
+      void r.live.connect();
+      await vi.advanceTimersByTimeAsync(11_900);
+      expect(r.live.state).toBe('connecting');
+      await vi.advanceTimersByTimeAsync(200);
+      expect(r.states.slice(-1)).toEqual(['error: Voice link timed out: the voice server did not answer within 12 s.']);
+      expect(r.micState.running).toBe(false);
+      expect(r.signals[0]?.aborted).toBe(true);
+      r.openSocket();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(r.sessions[0].closed).toBe(true);
+      expect(r.live.state).toBe('error');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('TALK press, release and press again', () => {
+  it('pressing TALK again inside the release tail continues the same turn: no early activityEnd, no second activityStart', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig({ tailMs: 160 });
+      await r.live.connect();
+      r.live.startTalk();
+      r.mic(LOUD);
+      r.live.endTalk();
+      await vi.advanceTimersByTimeAsync(60);
+      r.live.startTalk(); // an "oops" re-press 60 ms after release
+      r.mic(LOUD);
+      await vi.advanceTimersByTimeAsync(400); // long past the first release's tail
+      expect(kinds(r.lastSent())).toEqual(['activityStart', 'audio', 'audio']);
+      expect(r.live.state).toBe('listening');
+      r.live.endTalk();
+      r.mic(LOUD); // the tail still goes out
+      await vi.advanceTimersByTimeAsync(200);
+      expect(kinds(r.lastSent())).toEqual(['activityStart', 'audio', 'audio', 'audio', 'activityEnd']);
+      expect(r.live.state).toBe('thinking');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('CAPCOM is not heard while the operator holds TALK', async () => {
+    const r = rig();
+    await r.live.connect();
+    r.live.setOutput('native');
+    const audio = { inlineData: { data: 'AAABAAIA', mimeType: 'audio/pcm;rate=24000' } };
+    r.live.startTalk();
+    r.server().onmessage({ serverContent: { modelTurn: { parts: [audio] }, outputTranscription: { text: 'Late words.' } } });
+    expect(r.played).toEqual([]);
+    r.live.setOutput('elevenlabs');
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'More late words.' } } });
+    expect(r.spoken.filter((s) => s.startsWith('push'))).toEqual([]);
+    r.mic(LOUD);
+    r.live.endTalk();
+    r.live.setOutput('native');
+    r.server().onmessage({ serverContent: { modelTurn: { parts: [audio] } } });
+    expect(r.played).toEqual([3]);
+  });
+});
+
+describe('TALK held through silence', () => {
+  it('sends the model nothing and tells the operator nothing was heard', async () => {
+    const r = rig();
+    await r.live.connect();
+    r.live.startTalk();
+    for (let i = 0; i < 25; i++) r.mic(i % 2 ? new Int16Array(640) : NOISE); // 1 s of digital silence and room noise
+    r.live.endTalk();
+    expect(r.lastSent()).toEqual([]);
+    expect(r.live.state).toBe('ready');
+    expect(r.states.slice(-1)).toEqual(['ready: Nothing heard. Hold TALK and speak.']);
+    expect(r.voiceLogs()).toContain('Nothing heard. Hold TALK and speak.');
+    r.live.sendBayEvent('Bay state is now RUNNING.'); // the link is free for telemetry again
+    expect(kinds(r.lastSent())).toEqual(['client']);
+  });
+
+  it('opens the turn at the first chunk above about -45 dBFS, with about 300 ms of pre-roll in front', async () => {
+    const r = rig();
+    await r.live.connect();
+    r.live.startTalk();
+    const quiet = Array.from({ length: 12 }, (_, i) => new Int16Array(640).fill(150 + i)); // about -47 dBFS, each one distinct
+    quiet.forEach((c) => r.mic(c));
+    expect(r.lastSent()).toEqual([]);
+    const justAbove = new Int16Array(640).fill(207); // -44 dBFS
+    r.mic(justAbove);
+    r.mic(NOISE); // once the turn is open every chunk goes, quiet or not
+    r.live.endTalk();
+    const sent = r.lastSent();
+    expect(kinds(sent)).toEqual(['activityStart', ...Array<string>(8).fill('audio'), 'audio', 'audio', 'activityEnd']);
+    expect(audioSent(sent)).toEqual([...quiet.slice(-8).map(b64), b64(justAbove), b64(NOISE)]); // the newest 320 ms, in order
+  });
+});
+
+describe('Long tools keep the state', () => {
+  it('while a long tool runs the state is "working" with its name, until its result turn', async () => {
+    const r = rig();
+    r.bay.holdMoves = true; // the arm takes its time
+    await r.live.connect();
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk();
+    r.server().onmessage({ toolCall: { functionCalls: [{ id: 'c1', name: 'pick_sample', args: { id: 's1' } }] } });
+    await settle();
+    r.server().onmessage({ serverContent: { turnComplete: true } }); // CAPCOM's turn ends with only the call
+    expect(r.live.state).toBe('working');
+    expect(r.states.slice(-1)).toEqual(['working: pick_sample']);
+    r.live.startTalk(); // the operator can still talk meanwhile
+    r.mic(LOUD);
+    r.live.endTalk();
+    expect(r.live.state).toBe('thinking');
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Still picking.' }, turnComplete: true } });
+    expect(r.live.state).toBe('working');
+    r.bay.release(); // the pick lands: its [BAY EVENT] opens the result turn
+    await settle();
+    expect(kinds(r.lastSent()).slice(-1)).toEqual(['client']);
+    expect(r.live.state).toBe('thinking');
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Holding the Bennu fragment.' } } });
+    expect(r.live.state).toBe('speaking');
+    r.server().onmessage({ serverContent: { turnComplete: true } });
+    expect(r.live.state).toBe('ready');
+  });
+
+  it('a long tool that lands after Disconnect changes nothing', async () => {
+    const r = rig();
+    r.bay.holdMoves = true;
+    await r.live.connect();
+    r.server().onmessage({ toolCall: { functionCalls: [{ id: 'c1', name: 'pick_sample', args: { id: 's1' } }] } });
+    await settle();
+    r.live.disconnect();
+    const lines = r.toolLines.length;
+    r.bay.release();
+    await settle();
+    expect(r.toolLines).toHaveLength(lines);
+    expect(r.states.slice(-1)).toEqual(['off']);
+  });
+});
+
+describe('Live ledger latency', () => {
+  it('a turn with no audio or words is timed to its first reply message (the tool call), not 0 ms', async () => {
+    let now = 1_000;
+    const r = rig({ now: () => now });
+    await r.live.connect();
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk(); // activityEnd at t = 1000
+    now = 1_200;
+    r.server().onmessage({ serverContent: { inputTranscription: { text: 'Go home.' } } }); // the operator's words are not a reply
+    now = 1_852;
+    r.server().onmessage({ toolCall: { functionCalls: [{ id: 'h1', name: 'go_home', args: {} }] } });
+    now = 1_855;
+    r.server().onmessage({ usageMetadata: { promptTokenCount: 1905, responseTokenCount: 15 }, serverContent: { turnComplete: true } });
+    expect(r.entries).toHaveLength(1);
+    expect(r.entries[0]).toMatchObject({ purpose: 'live', latencyMs: 852, promptTokens: 1905, outputTokens: 15 });
+    // the result turn: timed to its first audio
+    now = 2_000;
+    await settle(); // go_home lands; its [BAY EVENT] goes out at t = 2000
+    expect(kinds(r.lastSent()).slice(-1)).toEqual(['client']);
+    now = 2_530;
+    r.server().onmessage({ serverContent: { modelTurn: { parts: [{ inlineData: { data: 'AAAA', mimeType: 'audio/pcm;rate=24000' } }] } } });
+    now = 3_400;
+    r.server().onmessage({ serverContent: { turnComplete: true } });
+    expect(r.entries[1].latencyMs).toBe(530);
+  });
+});
+
+describe('Voice conversation in the mission log', () => {
+  it('logs one voice line per side per turn ("YOU: ...", "CAPCOM: ..."), at the turn end or the barge-in', async () => {
+    const r = rig();
+    const said = () => r.voiceLogs().filter((l) => /^(YOU|CAPCOM): /.test(l));
+    await r.live.connect();
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk();
+    r.server().onmessage({ serverContent: { inputTranscription: { text: ' Mission control, what is' } } });
+    r.server().onmessage({ serverContent: { inputTranscription: { text: ' the bay status?' } } });
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'The bay is IDLE.' } } });
+    r.server().onmessage({ serverContent: { outputTranscription: { text: ' The arm is idle.' } } });
+    expect(said()).toEqual([]); // nothing until the turn ends
+    r.server().onmessage({ serverContent: { turnComplete: true } });
+    r.live.sendBayEvent('Bay state is now RUNNING.'); // a telemetry turn has only CAPCOM's side
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Copy, the bay is running.' }, turnComplete: true } });
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk();
+    r.server().onmessage({ serverContent: { inputTranscription: { text: 'Pick up the Bennu fragment.' } } });
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Picking it' } } });
+    r.live.startTalk(); // the operator cuts in
+    r.mic(LOUD);
+    r.server().onmessage({ serverContent: { interrupted: true } });
+    expect(said()).toEqual([
+      'YOU: Mission control, what is the bay status?',
+      'CAPCOM: The bay is IDLE. The arm is idle.',
+      'CAPCOM: Copy, the bay is running.',
+      'YOU: Pick up the Bennu fragment.',
+      'CAPCOM: Picking it',
+    ]);
+  });
+});
+
+describe('Mission-control callouts in the log (voice/index)', () => {
+  it('a callout the offline mission voice could not speak is logged "(voice offline)"', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }); // the 30 s health re-check
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true, gemini: true, elevenlabs: false, live: true }), { status: 200 }));
+    try {
+      const lines: string[] = [];
+      let emit: (l: LogLine) => void = () => {};
+      const announcer = startAnnouncer(
+        (cb) => {
+          emit = cb;
+          return () => {};
+        },
+        (l) => void lines.push(`${l.kind}:${l.text}`),
+      );
+      await settle();
+      emit({ t: 0, kind: 'safety', text: 'CYCLE_START (gesture): IDLE -> RUNNING. Cycle started.' });
+      expect(lines).toContain('voice:Cycle start. (voice offline)');
+      expect(lines).not.toContain('voice:Cycle start.');
+      announcer.dispose();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+    expect(calloutLogText('Cycle start.', { broken: false })).toBe('Cycle start.'); // spoken: logged as said
+    expect(calloutLogText('Cycle start.', { broken: true })).toBe('Cycle start. (voice offline)');
   });
 });
