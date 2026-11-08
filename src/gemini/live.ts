@@ -6,7 +6,9 @@
 // Long tools run NON_BLOCKING: the tool call is answered at once ("started") and the real result
 // goes back as a "[BAY EVENT] ..." message when it lands. Connect only from a click. The browser
 // gets a single-use token from the server (or uses the dev key locally); a goAway renews the link
-// and resumes the session.
+// and resumes the session. Each connect attempt holds a token: a Disconnect (or a newer attempt)
+// wins every race, the loser releases what it started and changes no state, and events from an
+// old socket are dropped. A socket the server closes before setup fails at once, with its reason.
 import type { BayApi, GeminiCallEntry } from '../contracts';
 import type { SpeakerLike } from '../voice/elevenSpeaker';
 import { AudioChannel, Downsampler, MIC_RATE, TTS_RATE, base64ToBytes, bytesToBase64, floatToPcm16, pcm16leToFloat32 } from '../voice/pcm';
@@ -62,7 +64,46 @@ export interface LiveCallbacksLite {
   onclose?: (e: { code?: number; reason?: string }) => void;
 }
 
-export type LiveConnector = (config: Record<string, unknown>, callbacks: LiveCallbacksLite) => Promise<LiveSessionLike>;
+/** Opens one socket and resolves after setup. `signal` aborts when the attempt is abandoned. */
+export type LiveConnector = (config: Record<string, unknown>, callbacks: LiveCallbacksLite, signal?: AbortSignal) => Promise<LiveSessionLike>;
+
+/** A voice-link failure whose message is already a plain sentence for the operator. */
+export class LiveLinkError extends Error {
+  readonly code: string;
+  readonly retryAfterS: number | undefined;
+  constructor(message: string, code: string, retryAfterS?: number) {
+    super(message);
+    this.name = 'LiveLinkError';
+    this.code = code;
+    this.retryAfterS = retryAfterS;
+  }
+}
+
+/** The panel text for a failure: plain sentences as they are, anything else after a prefix. */
+function failureText(err: unknown, prefix: string): string {
+  return err instanceof LiveLinkError ? err.message : `${prefix}: ${errorText(err)}`;
+}
+
+/** "Quota exceeded for this model." -> "quota exceeded for this model" (acronyms keep their case). */
+function clause(text: string): string {
+  const t = text.trim().replace(/[.!\s]+$/, '');
+  return /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
+}
+
+/** The sentence for a socket the server closed before setup finished. */
+export function refusalText(e: { code?: number; reason?: string } | undefined): string {
+  const why = e?.reason ? clause(e.reason) : '';
+  const code = typeof e?.code === 'number' ? ` (${e.code})` : '';
+  return `Voice link refused: ${why || 'the server closed the link'}${code}.`;
+}
+
+function closeQuietly(session: LiveSessionLike | null | undefined): void {
+  try {
+    session?.close();
+  } catch {
+    // already closed
+  }
+}
 
 export interface MicLike {
   /** Start capturing; chunks are 16 kHz mono PCM16. Asks for permission on first use. */
@@ -107,8 +148,18 @@ export interface LiveToken {
 }
 
 /** POST the config to the server, which checks the model and mints a single-use token for it. */
-export async function fetchLiveToken(config: Record<string, unknown>, fetchFn: typeof fetch = fetch, url = '/api/gemini/live-token'): Promise<LiveToken> {
-  const res = await fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: LIVE, config }) });
+export async function fetchLiveToken(
+  config: Record<string, unknown>,
+  fetchFn: typeof fetch = fetch,
+  url = '/api/gemini/live-token',
+  signal?: AbortSignal,
+): Promise<LiveToken> {
+  const res = await fetchFn(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: LIVE, config }),
+    ...(signal ? { signal } : {}),
+  });
   const body = (await res.json().catch(() => ({}))) as { name?: unknown; apiVersion?: unknown; expireTime?: unknown; message?: unknown; error?: unknown };
   if (!res.ok || typeof body.name !== 'string') {
     throw new Error(String(body.message ?? body.error ?? `token request failed (HTTP ${res.status})`));
@@ -120,24 +171,29 @@ export async function fetchLiveToken(config: Record<string, unknown>, fetchFn: t
   };
 }
 
-/** Dev key directly, else a server-minted token. */
+/** Dev key directly, else a server-minted token. An abandoned attempt mints or keeps nothing. */
 export function defaultConnector(): LiveConnector {
-  return async (config, callbacks) => {
+  return async (config, callbacks, signal) => {
     const sdk = await import('@google/genai/web');
     const devKey = (import.meta.env?.VITE_GEMINI_API_KEY as string | undefined) || '';
     let ai: InstanceType<typeof sdk.GoogleGenAI>;
     if (devKey) {
       ai = new sdk.GoogleGenAI({ apiKey: devKey });
     } else {
-      const token = await fetchLiveToken(config);
+      const token = await fetchLiveToken(config, fetch, undefined, signal);
       ai = new sdk.GoogleGenAI({ apiKey: token.name, httpOptions: { apiVersion: token.apiVersion } });
     }
-    const session = await ai.live.connect({
+    if (signal?.aborted) throw new Error('voice link abandoned');
+    const session = (await ai.live.connect({
       model: LIVE,
       config: config as unknown as Parameters<typeof ai.live.connect>[0]['config'],
       callbacks: callbacks as unknown as Parameters<typeof ai.live.connect>[0]['callbacks'],
-    });
-    return session as unknown as LiveSessionLike;
+    })) as unknown as LiveSessionLike;
+    if (signal?.aborted) {
+      closeQuietly(session);
+      throw new Error('voice link abandoned');
+    }
+    return session;
   };
 }
 
@@ -147,51 +203,65 @@ export class BrowserMic implements MicLike {
   private ctx: AudioContext | null = null;
   private frame = new Float32Array(640);
   private fill = 0;
+  /** bumped by stop(): a start() still waiting on the browser then gives its stream back */
+  private run = 0;
 
   async start(onChunk: (pcm16: Int16Array) => void): Promise<void> {
     if (this.stream) return;
+    const run = ++this.run;
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
-    this.stream = stream;
-    const ctx = new AudioContext();
-    this.ctx = ctx;
-    const src = ctx.createMediaStreamSource(stream);
-    const down = new Downsampler(ctx.sampleRate, MIC_RATE);
-    const handle = (f: Float32Array) => {
-      const d = down.push(f);
-      for (let i = 0; i < d.length; i++) {
-        this.frame[this.fill++] = d[i];
-        if (this.fill === this.frame.length) {
-          onChunk(floatToPcm16(this.frame));
-          this.fill = 0;
-        }
-      }
-    };
-    const silent = ctx.createGain();
-    silent.gain.value = 0;
-    silent.connect(ctx.destination);
-    if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
-      const code =
-        "class Tap extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('starhand-mic-tap',Tap);";
-      const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
-      try {
-        await ctx.audioWorklet.addModule(url);
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-      const node = new AudioWorkletNode(ctx, 'starhand-mic-tap');
-      node.port.onmessage = (e: MessageEvent<Float32Array>) => handle(e.data);
-      src.connect(node).connect(silent);
-    } else {
-      const sp = ctx.createScriptProcessor(2048, 1, 1);
-      sp.onaudioprocess = (e) => handle(e.inputBuffer.getChannelData(0).slice(0));
-      src.connect(sp).connect(silent);
+    if (run !== this.run) {
+      stream.getTracks().forEach((t) => t.stop()); // stopped while the browser was asking
+      return;
     }
-    if (ctx.state === 'suspended') await ctx.resume();
+    this.stream = stream;
+    try {
+      const ctx = new AudioContext();
+      this.ctx = ctx;
+      const src = ctx.createMediaStreamSource(stream);
+      const down = new Downsampler(ctx.sampleRate, MIC_RATE);
+      const handle = (f: Float32Array) => {
+        const d = down.push(f);
+        for (let i = 0; i < d.length; i++) {
+          this.frame[this.fill++] = d[i];
+          if (this.fill === this.frame.length) {
+            onChunk(floatToPcm16(this.frame));
+            this.fill = 0;
+          }
+        }
+      };
+      const silent = ctx.createGain();
+      silent.gain.value = 0;
+      silent.connect(ctx.destination);
+      if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+        const code =
+          "class Tap extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('starhand-mic-tap',Tap);";
+        const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+        try {
+          await ctx.audioWorklet.addModule(url);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+        if (run !== this.run) return; // stopped meanwhile: stop() released the stream and the context
+        const node = new AudioWorkletNode(ctx, 'starhand-mic-tap');
+        node.port.onmessage = (e: MessageEvent<Float32Array>) => handle(e.data);
+        src.connect(node).connect(silent);
+      } else {
+        const sp = ctx.createScriptProcessor(2048, 1, 1);
+        sp.onaudioprocess = (e) => handle(e.inputBuffer.getChannelData(0).slice(0));
+        src.connect(sp).connect(silent);
+      }
+      if (ctx.state === 'suspended') await ctx.resume();
+    } catch (err) {
+      if (run === this.run) this.stop(); // a half-built capture must not keep the microphone
+      throw err;
+    }
   }
 
   stop(): void {
+    this.run++;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     void this.ctx?.close().catch(() => undefined);
@@ -226,6 +296,8 @@ export interface LiveVoiceOptions {
   maxReconnects?: number;
   /** a [BAY EVENT] waits at most this long for the model to finish its turn */
   eventWaitMs?: number;
+  /** a socket not set up after this long fails the attempt (ms) */
+  openTimeoutMs?: number;
   now?: () => number;
   /** where Live turns go in the ledger (default: the app-wide Gemini client) */
   recordEntry?: (e: GeminiCallEntry) => void;
@@ -247,11 +319,17 @@ export class LiveVoice {
   private readonly tailMs: number;
   private readonly maxReconnects: number;
   private readonly eventWaitMs: number;
+  private readonly openTimeoutMs: number;
   private readonly now: () => number;
   private readonly recordEntry: (e: GeminiCallEntry) => void;
   private output: LiveOutput;
   private session: LiveSessionLike | null = null;
+  /** bumped by every connect() and disconnect(): work from an older value is stale */
+  private attempt = 0;
+  /** bumped by every socket and by disconnect(): callbacks from an older socket are dropped */
   private generation = 0;
+  /** the socket being opened; aborted when a disconnect or a newer socket supersedes it */
+  private opening: AbortController | null = null;
   private handle: string | null = null;
   private talking = false;
   private tailUntil = 0;
@@ -280,6 +358,7 @@ export class LiveVoice {
     this.tailMs = opts.tailMs ?? 160;
     this.maxReconnects = opts.maxReconnects ?? 2;
     this.eventWaitMs = opts.eventWaitMs ?? 15_000;
+    this.openTimeoutMs = opts.openTimeoutMs ?? 12_000;
     this.now = opts.now ?? Date.now;
     this.recordEntry = opts.recordEntry ?? ((e) => getGeminiClient().record(e));
   }
@@ -292,9 +371,14 @@ export class LiveVoice {
     return this.output;
   }
 
-  /** Open the voice link. Call from a click: it unlocks audio and asks for the microphone. */
+  /**
+   * Open the voice link. Call from a click: it unlocks audio and asks for the microphone. While a
+   * link is up or on its way, a second call does nothing, so a double click opens one link.
+   */
   async connect(): Promise<void> {
     if (this.state !== 'off' && this.state !== 'error') return;
+    const token = ++this.attempt;
+    const stale = () => token !== this.attempt;
     this.closing = false;
     this.reconnects = 0;
     this.setState('connecting');
@@ -302,32 +386,36 @@ export class LiveVoice {
     try {
       await this.mic.start((pcm) => this.onMic(pcm));
     } catch (err) {
-      this.setState('error', `Microphone unavailable: ${errorText(err)}`);
+      if (!stale()) this.setState('error', `Microphone unavailable: ${errorText(err)}`);
       return;
     }
+    if (stale()) return this.abandon();
     await unlock;
+    if (stale()) return this.abandon();
     try {
-      await this.open();
-      this.setState('ready');
-      logTo(this.sink, 'voice', 'Voice link up. Hold TALK to speak to CAPCOM.');
+      if (!(await this.open())) return this.abandon();
     } catch (err) {
+      if (stale()) return this.abandon();
       this.mic.stop();
       this.session = null;
-      this.setState('error', `Voice link failed: ${errorText(err)}`);
-      logTo(this.sink, 'voice', `Voice link failed: ${errorText(err)}`);
+      const text = failureText(err, 'Voice link failed');
+      this.setState('error', text);
+      logTo(this.sink, 'voice', text);
+      return;
     }
+    this.setState('ready');
+    logTo(this.sink, 'voice', 'Voice link up. Hold TALK to speak to CAPCOM.');
   }
 
   disconnect(): void {
-    this.closing = true;
+    this.attempt++;
     this.generation++;
+    this.closing = true;
+    this.opening?.abort();
+    this.opening = null;
     this.talking = false;
     this.mic.stop();
-    try {
-      this.session?.close();
-    } catch {
-      // already closed
-    }
+    closeQuietly(this.session);
     this.session = null;
     this.speaker?.cancel();
     this.player.stop();
@@ -415,26 +503,72 @@ export class LiveVoice {
     this.firstOutputAt = 0;
   }
 
-  private async open(): Promise<void> {
+  /** A connect attempt that lost a race changes no state; it lets go of the microphone only if no link wants it. */
+  private abandon(): void {
+    if (this.state === 'off' || this.state === 'error') this.mic.stop();
+  }
+
+  /**
+   * Open one socket. Resolves true once it is set up and installed, false when a disconnect or a
+   * newer socket superseded it (a socket that still arrives is closed). Rejects when the server
+   * closes it or it errors before setup, or when it is not set up within openTimeoutMs.
+   */
+  private open(): Promise<boolean> {
     const gen = ++this.generation;
+    this.opening?.abort();
+    const ac = new AbortController();
+    this.opening = ac;
     const config = buildLiveConfig({ ...this.configOptions, handle: this.handle });
-    const session = await this.connector(config, {
-      onmessage: (m) => {
-        if (gen === this.generation) this.onMessage(m);
-      },
-      onerror: (e) => {
-        if (gen === this.generation) logTo(this.sink, 'voice', `Voice link error: ${e?.message || 'unknown error'}`);
-      },
-      onclose: (e) => {
-        if (gen === this.generation) this.onClose(e);
-      },
+    return new Promise<boolean>((resolve, reject) => {
+      let done = false;
+      let installed = false;
+      const finish = (ok: boolean, err?: Error) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        ac.signal.removeEventListener('abort', superseded);
+        if (this.opening === ac) this.opening = null;
+        if (err) {
+          ac.abort(); // the connector gives up on its side too
+          reject(err);
+        } else resolve(ok);
+      };
+      const superseded = () => finish(false);
+      ac.signal.addEventListener('abort', superseded);
+      const timer = setTimeout(
+        () => finish(false, new LiveLinkError(`Voice link timed out: the voice server did not answer within ${Math.round(this.openTimeoutMs / 1000)} s.`, 'timeout')),
+        this.openTimeoutMs,
+      );
+      const callbacks: LiveCallbacksLite = {
+        onmessage: (m) => {
+          // messages queued during setup arrive just before the connector resolves
+          if (gen === this.generation && (installed || !done)) this.onMessage(m);
+        },
+        onerror: (e) => {
+          if (!done) finish(false, new LiveLinkError('Voice link failed: could not reach the voice server.', 'socket_error'));
+          else if (installed && gen === this.generation) logTo(this.sink, 'voice', `Voice link error: ${e?.message || 'unknown error'}`);
+        },
+        onclose: (e) => {
+          // Closed before setup (quota, a used token, a config the server refuses): a refusal, not a renewal.
+          if (!done) finish(false, new LiveLinkError(refusalText(e), 'refused'));
+          else if (installed && gen === this.generation) this.onClose(e);
+        },
+      };
+      this.connector(config, callbacks, ac.signal).then(
+        (session) => {
+          if (done || gen !== this.generation) {
+            closeQuietly(session); // superseded, refused or timed out meanwhile
+            finish(false);
+            return;
+          }
+          installed = true;
+          this.session = session;
+          if (this.talking) session.sendRealtimeInput({ activityStart: {} });
+          finish(true);
+        },
+        (err: unknown) => finish(false, err instanceof Error ? err : new Error(String(err))),
+      );
     });
-    if (gen !== this.generation) {
-      session.close(); // superseded while connecting (disconnect or another renewal)
-      return;
-    }
-    this.session = session;
-    if (this.talking) session.sendRealtimeInput({ activityStart: {} });
   }
 
   private onClose(e: { code?: number; reason?: string }): void {
@@ -455,22 +589,25 @@ export class LiveVoice {
     if (this.renewing || this.closing) return;
     this.renewing = true;
     this.reconnects++;
+    const token = this.attempt;
     const old = this.session;
     logTo(this.sink, 'voice', `Voice link renewing: ${reason}.`);
     try {
-      await this.open();
-      try {
-        if (old && old !== this.session) old.close();
-      } catch {
-        // already closed
-      }
+      if (!(await this.open())) return; // superseded: whoever did it owns the state now
+      if (old !== this.session) closeQuietly(old);
       logTo(this.sink, 'voice', `Voice link renewed${this.handle ? ', context resumed' : ', fresh context'}.`);
       this.awaitingModel = false;
       if (!this.talking) this.setState('ready');
       this.flushOutbox();
     } catch (err) {
+      if (token !== this.attempt) return;
+      closeQuietly(old);
       this.session = null;
-      this.setState('error', `Voice link lost: ${errorText(err)}`);
+      this.talking = false;
+      this.mic.stop();
+      const text = failureText(err, 'Voice link lost');
+      this.setState('error', text);
+      logTo(this.sink, 'voice', `${text} Press Connect voice to retry.`);
     } finally {
       this.renewing = false;
     }

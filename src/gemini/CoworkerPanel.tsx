@@ -230,7 +230,8 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
     void live.connect();
   };
 
-  const disconnect = () => {
+  const disconnect = (e?: { detail?: number }) => {
+    if ((e?.detail ?? 0) > 1) return; // the second click of a double click on "Connect voice" lands here
     liveRef.current?.disconnect();
     liveRef.current = null;
     setTalking(false);
