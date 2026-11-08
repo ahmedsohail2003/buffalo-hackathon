@@ -9,6 +9,10 @@
 // and resumes the session. Each connect attempt holds a token: a Disconnect (or a newer attempt)
 // wins every race, the loser releases what it started and changes no state, and events from an
 // old socket are dropped. A socket the server closes before setup fails at once, with its reason.
+//
+// The operator's turn opens (activityStart) only when the microphone first hears speech, with a
+// short pre-roll in front, so TALK held through silence sends the model nothing. Pressing TALK
+// again inside the release tail continues the same turn.
 import type { BayApi, GeminiCallEntry } from '../contracts';
 import type { SpeakerLike } from '../voice/elevenSpeaker';
 import { AudioChannel, Downsampler, MIC_RATE, TTS_RATE, base64ToBytes, bytesToBase64, floatToPcm16, pcm16leToFloat32 } from '../voice/pcm';
@@ -32,6 +36,18 @@ export const LIVE_PROMPT = [
 
 export type LiveOutput = 'elevenlabs' | 'native';
 export type LiveState = 'off' | 'connecting' | 'ready' | 'listening' | 'thinking' | 'speaking' | 'error';
+
+/** Shown when TALK was held but nothing reached the speech threshold. */
+export const NOTHING_HEARD = 'Nothing heard. Hold TALK and speak.';
+
+/** RMS level of a PCM16 chunk in dBFS (-Infinity for digital silence). */
+export function levelDbfs(pcm: Int16Array): number {
+  if (!pcm.length) return -Infinity;
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+  const rms = Math.sqrt(sum / pcm.length) / 32768;
+  return rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+}
 
 export interface LiveMessageLite {
   setupComplete?: unknown;
@@ -298,6 +314,10 @@ export interface LiveVoiceOptions {
   eventWaitMs?: number;
   /** a socket not set up after this long fails the attempt (ms) */
   openTimeoutMs?: number;
+  /** while TALK is held, the first microphone chunk this loud (RMS dBFS) opens the operator's turn */
+  speechDbfs?: number;
+  /** audio from just before that chunk sent in front of it, so the first syllable is kept (ms) */
+  prerollMs?: number;
   now?: () => number;
   /** where Live turns go in the ledger (default: the app-wide Gemini client) */
   recordEntry?: (e: GeminiCallEntry) => void;
@@ -320,6 +340,8 @@ export class LiveVoice {
   private readonly maxReconnects: number;
   private readonly eventWaitMs: number;
   private readonly openTimeoutMs: number;
+  private readonly speechDbfs: number;
+  private readonly prerollSamples: number;
   private readonly now: () => number;
   private readonly recordEntry: (e: GeminiCallEntry) => void;
   private output: LiveOutput;
@@ -331,7 +353,14 @@ export class LiveVoice {
   /** the socket being opened; aborted when a disconnect or a newer socket supersedes it */
   private opening: AbortController | null = null;
   private handle: string | null = null;
+  /** TALK is held */
   private talking = false;
+  /** the operator's turn: 'pending' until speech is heard, 'open' once activityStart went out */
+  private activity: 'none' | 'pending' | 'open' = 'none';
+  private preroll: Int16Array[] = [];
+  private prerollLen = 0;
+  /** the release tail; pressing TALK again before it fires continues the same turn */
+  private tailTimer: ReturnType<typeof setTimeout> | null = null;
   private tailUntil = 0;
   private awaitingModel = false;
   private awaitSince = 0;
@@ -359,6 +388,8 @@ export class LiveVoice {
     this.maxReconnects = opts.maxReconnects ?? 2;
     this.eventWaitMs = opts.eventWaitMs ?? 15_000;
     this.openTimeoutMs = opts.openTimeoutMs ?? 12_000;
+    this.speechDbfs = opts.speechDbfs ?? -45;
+    this.prerollSamples = Math.round(((opts.prerollMs ?? 300) * MIC_RATE) / 1000);
     this.now = opts.now ?? Date.now;
     this.recordEntry = opts.recordEntry ?? ((e) => getGeminiClient().record(e));
   }
@@ -414,6 +445,7 @@ export class LiveVoice {
     this.opening?.abort();
     this.opening = null;
     this.talking = false;
+    this.endActivity();
     this.mic.stop();
     closeQuietly(this.session);
     this.session = null;
@@ -426,30 +458,36 @@ export class LiveVoice {
     this.setState('off');
   }
 
-  /** TALK pressed: barge in on CAPCOM and open the operator's turn. */
+  /**
+   * TALK pressed: barge in on CAPCOM and start the operator's turn. activityStart waits for the
+   * first chunk of speech. Pressed again inside the release tail, the same turn simply goes on.
+   */
   startTalk(): void {
     if (!this.session || this.talking) return;
     this.speaker?.cancel();
     this.player.stop();
     this.talking = true;
-    this.session.sendRealtimeInput({ activityStart: {} });
+    if (this.tailTimer) {
+      clearTimeout(this.tailTimer);
+      this.tailTimer = null;
+      this.tailUntil = 0;
+    } else {
+      this.activity = 'pending';
+      this.preroll = [];
+      this.prerollLen = 0;
+    }
     this.setState('listening');
   }
 
-  /** TALK released: send the audio tail, then close the operator's turn. */
+  /** TALK released: send the audio tail, then close the operator's turn (or drop it if nothing was heard). */
   endTalk(): void {
     if (!this.talking) return;
     this.talking = false;
     this.tailUntil = this.now() + this.tailMs;
-    const session = this.session;
-    const finish = () => {
-      if (!session || session !== this.session) return;
-      session.sendRealtimeInput({ activityEnd: {} });
-      this.expectModel();
-      this.setState('thinking');
-    };
-    if (this.tailMs > 0) setTimeout(finish, this.tailMs);
-    else finish();
+    if (this.tailTimer) clearTimeout(this.tailTimer);
+    this.tailTimer = null;
+    if (this.tailMs > 0) this.tailTimer = setTimeout(() => this.finishTalk(), this.tailMs);
+    else this.finishTalk();
   }
 
   /** Telemetry for CAPCOM (sent between turns, never over the operator). */
@@ -501,6 +539,41 @@ export class LiveVoice {
     this.awaitSince = this.now();
     this.turnStart = this.now();
     this.firstOutputAt = 0;
+  }
+
+  /** The release tail is over: close the operator's turn, or drop it when nothing was heard. */
+  private finishTalk(): void {
+    this.tailTimer = null;
+    if (this.talking) return; // pressed again: still the same turn
+    const session = this.session;
+    const opened = this.activity === 'open';
+    this.endActivity();
+    if (!session) return; // the link dropped meanwhile; a renewal settles the state
+    if (opened) {
+      session.sendRealtimeInput({ activityEnd: {} });
+      this.expectModel();
+      this.setState('thinking');
+      return;
+    }
+    // TALK held through silence: the model gets nothing (empty audio makes it invent speech).
+    this.setState('ready', NOTHING_HEARD);
+    logTo(this.sink, 'voice', NOTHING_HEARD);
+    this.flushOutbox();
+  }
+
+  /** Forget the operator's turn: no tail, no pre-roll. */
+  private endActivity(): void {
+    if (this.tailTimer) clearTimeout(this.tailTimer);
+    this.tailTimer = null;
+    this.tailUntil = 0;
+    this.activity = 'none';
+    this.preroll = [];
+    this.prerollLen = 0;
+  }
+
+  /** TALK is held, or its release tail is still running. */
+  private operatorTurn(): boolean {
+    return this.talking || this.tailTimer !== null;
   }
 
   /** A connect attempt that lost a race changes no state; it lets go of the microphone only if no link wants it. */
@@ -563,7 +636,7 @@ export class LiveVoice {
           }
           installed = true;
           this.session = session;
-          if (this.talking) session.sendRealtimeInput({ activityStart: {} });
+          if (this.activity === 'open') session.sendRealtimeInput({ activityStart: {} }); // renewed mid-turn
           finish(true);
         },
         (err: unknown) => finish(false, err instanceof Error ? err : new Error(String(err))),
@@ -580,6 +653,7 @@ export class LiveVoice {
       return;
     }
     this.talking = false;
+    this.endActivity();
     this.mic.stop();
     this.setState('error', `Voice link closed (${why}).`);
     logTo(this.sink, 'voice', `Voice link closed (${why}). Press Connect voice to retry.`);
@@ -597,13 +671,14 @@ export class LiveVoice {
       if (old !== this.session) closeQuietly(old);
       logTo(this.sink, 'voice', `Voice link renewed${this.handle ? ', context resumed' : ', fresh context'}.`);
       this.awaitingModel = false;
-      if (!this.talking) this.setState('ready');
+      if (!this.operatorTurn()) this.setState('ready');
       this.flushOutbox();
     } catch (err) {
       if (token !== this.attempt) return;
       closeQuietly(old);
       this.session = null;
       this.talking = false;
+      this.endActivity();
       this.mic.stop();
       const text = failureText(err, 'Voice link lost');
       this.setState('error', text);
@@ -615,15 +690,43 @@ export class LiveVoice {
 
   private onMic(pcm: Int16Array): void {
     const session = this.session;
-    if (!session || !(this.talking || this.now() < this.tailUntil)) return;
+    if (!session) return;
+    if (this.activity === 'open') {
+      if (this.talking || this.now() < this.tailUntil) this.sendAudio(session, pcm);
+      return;
+    }
+    if (this.activity !== 'pending' || !this.talking) return;
+    if (levelDbfs(pcm) < this.speechDbfs) {
+      this.keepPreroll(pcm);
+      return;
+    }
+    // The first speech: open the operator's turn with the pre-roll in front of it.
+    this.activity = 'open';
+    session.sendRealtimeInput({ activityStart: {} });
+    for (const chunk of this.preroll) this.sendAudio(session, chunk);
+    this.preroll = [];
+    this.prerollLen = 0;
+    this.sendAudio(session, pcm);
+  }
+
+  private sendAudio(session: LiveSessionLike, pcm: Int16Array): void {
     session.sendRealtimeInput({
       audio: { data: bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), mimeType: `audio/pcm;rate=${MIC_RATE}` },
     });
   }
 
+  /** Keep the newest prerollMs of quiet audio (whole chunks, at least that much). */
+  private keepPreroll(pcm: Int16Array): void {
+    this.preroll.push(pcm.slice());
+    this.prerollLen += pcm.length;
+    while (this.preroll.length > 1 && this.prerollLen - this.preroll[0].length >= this.prerollSamples) {
+      this.prerollLen -= (this.preroll.shift() as Int16Array).length;
+    }
+  }
+
   private markOutput(): void {
     if (!this.firstOutputAt) this.firstOutputAt = this.now();
-    if (!this.talking && this.state !== 'speaking') this.setState('speaking');
+    if (!this.operatorTurn() && this.state !== 'speaking') this.setState('speaking');
   }
 
   private onMessage(m: LiveMessageLite): void {
@@ -639,17 +742,18 @@ export class LiveVoice {
       }
       const heard = sc.inputTranscription?.text;
       if (heard) this.events.onTranscript?.('operator', heard);
+      // CAPCOM is not heard over the operator: while TALK is held its audio is dropped.
       const said = sc.outputTranscription?.text;
       if (said) {
         this.markOutput();
         this.events.onTranscript?.('capcom', said);
-        if (this.useEleven()) this.speaker?.push(said, 'coworker');
+        if (this.useEleven() && !this.talking) this.speaker?.push(said, 'coworker');
       }
       for (const p of sc.modelTurn?.parts ?? []) {
         const d = p.inlineData;
         if (!d?.data || !/^audio\//.test(d.mimeType ?? 'audio/pcm')) continue;
         this.markOutput();
-        if (!this.useEleven() && !this.muted) this.player.play(pcm16leToFloat32(base64ToBytes(d.data)).samples);
+        if (!this.useEleven() && !this.muted && !this.talking) this.player.play(pcm16leToFloat32(base64ToBytes(d.data)).samples);
       }
       if (sc.turnComplete) this.onTurnComplete();
     }
@@ -683,7 +787,7 @@ export class LiveVoice {
     this.turnStart = 0;
     this.firstOutputAt = 0;
     this.events.onTurnEnd?.();
-    if (!this.talking) this.setState('ready');
+    if (!this.operatorTurn()) this.setState('ready');
     this.flushOutbox();
   }
 
@@ -724,7 +828,7 @@ export class LiveVoice {
   }
 
   private flushOutbox(force = false): void {
-    if (!this.session || !this.outbox.length || this.talking) return;
+    if (!this.session || !this.outbox.length || this.operatorTurn()) return;
     if (this.awaitingModel && !(force || this.now() - this.awaitSince >= this.eventWaitMs)) return;
     const text = this.outbox.join('\n');
     this.outbox = [];
