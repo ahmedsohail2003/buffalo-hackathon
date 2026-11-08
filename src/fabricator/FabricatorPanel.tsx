@@ -34,7 +34,8 @@ export function fabLogLine(r: Placed | Rejection, source: string, name?: string)
 }
 
 export function FabricatorPanel({ bay, generateJson, log }: Props) {
-  const [text, setText] = useState('a 30 mm fragment of asteroid Bennu');
+  // Empty, with the example as a placeholder: a presenter who clicks and types must not append to it.
+  const [text, setText] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [card, setCard] = useState<Card | null>(null);
   const [pickNote, setPickNote] = useState<string | null>(null);
@@ -148,7 +149,7 @@ export function FabricatorView({ ready, online, text, onText, onDesign, onPreset
         <span className="fab-sub">Gemini designs · code measures and decides</span>
       </header>
       <form className="fab-row" onSubmit={(e) => { e.preventDefault(); onDesign(); }}>
-        <input className="fab-input" value={text} onChange={(e) => onText(e.target.value)} placeholder="Describe a sample…" aria-label="Describe a sample" />
+        <input className="fab-input" value={text} onChange={(e) => onText(e.target.value)} placeholder="e.g. a 30 mm fragment of asteroid Bennu" aria-label="Describe a sample" />
         <button type="submit" className="fab-btn primary" disabled={!ready || !!busy || !text.trim()} title={online ? 'Gemini designs a shape program; code builds, measures and checks it' : 'Gemini needs a key; offline this fabricates the closest preset'}>
           {designing ? 'Designing…' : 'Design with Gemini'}
         </button>
