@@ -19,7 +19,8 @@ write_files:
     content: |
       # Public settings for starhand-setup, starhand-update and starhand-caddy.
       DOMAIN=
-      BRANCH=main
+      # The project lives on this branch until it is merged into main; then set BRANCH=main.
+      BRANCH=claude/pensive-johnson-mek8ib
       REPO=https://github.com/ahmedsohail2003/buffalo-hackathon
       # Optional: an email for Let's Encrypt expiry notices
       ACME_EMAIL=

@@ -30,8 +30,10 @@ Caddyfile for your domain plus a free `<ip-with-dashes>.sslip.io` name.
    3. Image: **Ubuntu 24.04 LTS x64**.
    4. Plan: **vc2-2c-4gb** (2 vCPU, 4 GB memory).
    5. Open **Additional Features**, turn on **Cloud-Init User-Data**, and paste the whole of
-      `deploy/vultr/cloud-init.yaml`. To deploy a branch other than `main`, change `BRANCH=`
-      in the pasted text first. You can set `DOMAIN=` now or later.
+      `deploy/vultr/cloud-init.yaml`. It deploys `claude/pensive-johnson-mek8ib`, where the
+      project lives until it is merged into `main`; after that merge, change `BRANCH=` to `main`
+      in the pasted text (or run `starhand-update main` on the server). You can set `DOMAIN=`
+      now or later.
    6. Select your SSH key, set the hostname and the label to `starhand`, and choose **Deploy Now**.
 5. **Wait for the install.** It takes about 5 to 8 minutes after the server shows **Running**.
    Copy the server's IPv4 address from the dashboard, then check progress:

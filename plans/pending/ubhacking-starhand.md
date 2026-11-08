@@ -62,8 +62,9 @@ The original T, G, S and V modules were written tonight (from 14:37 on) against 
 
 ## Not yet specified
 
-- A: are Live ephemeral tokens served on v1alpha or v1beta? This needs a smoke test with a real key.
-- The user's Gemini key, ElevenLabs key, Vultr account and domain are needed to test these for real.
+- ~~A: are Live ephemeral tokens served on v1alpha or v1beta?~~ **Answered 18:50:** a real-key smoke test passed on both, straight to Gemini and through the server. Keep the v1alpha default (the SDK warns that its ephemeral-token support is v1alpha only).
+- Still needed from the user: the ElevenLabs key (added as a network secret in the environment settings), the Vultr account and the domain. The Gemini key arrived at 18:44.
+- `main` holds only the starting README; the project is on `claude/pensive-johnson-mek8ib` until the user approves a merge. The Vultr cloud-init deploys that branch for now.
 - The user: will you be at in-person judging Sunday 1:45–4:45 PM in Davis Hall?
 
 ## Always / Never
@@ -96,7 +97,7 @@ The original T, G, S and V modules were written tonight (from 14:37 on) against 
 | D: deck | **Done.** 12 slides with real screenshots and speaker notes. |
 | Integration | **Done 16:33.** Install modules in `src/plugins.ts`. 229 tests pass and tsc is clean. In the Playwright end-to-end run, the simulated hand steers the arm onto the cube (0.1 mm), one pinch picks it, a second pinch stows it in containment ("Sample secured in containment."), STOP and RESUME are announced, and there are no console errors. |
 | Safety and security review | **Done 17:38.** Three reviewers (safety chain, key-holding server, AI trust boundary), then adversarial verification: 13 of 14 findings confirmed, 2 of them high. **All 13 fixed at 17:50**, each with a regression test that fails on the old code (245 tests pass; the end-to-end browser run passes again). Gemini can no longer start the arm from IDLE (D13). A hand that comes back into view already signalling holds the arm. Hand signals still fire at a few camera frames per second. The fist mask resets on every sample. An E-STOP or STOP during a design places nothing. Mission control announces containment only from the arm's own release line. check_bay answers the question asked. Grip width counts where triangle edges cross the fingertip plane. Place spots respect the bin wall and deck spacing. The Gemini proxy caps what one request can cost, and server-wide budgets cap Gemini and ElevenLabs use. |
-| Real-key smoke tests (Gemini, ElevenLabs, Live) | Waiting on the user's keys |
+| Real-key smoke tests (Gemini, ElevenLabs, Live) | **Gemini and Live pass, 18:50.** All four model ids exist for the key. `scripts/smoke-gemini.mjs` passes 9/9 straight to Gemini and 9/9 through the key server: Flash text, a function-call round trip, a JSON schema, Robotics-ER pointing (0/1000 off), and Live on v1alpha and v1beta. The real-app probes (designer, coworker with Robotics-ER, Live in the browser, a demo rehearsal) are running. ElevenLabs is waiting on the key. |
 | Vultr deploy, domain | Waiting on the user's account |
 | Devpost draft (due 23:00) | Text ready in `docs/SUBMISSION.md`; the user must create the project on Devpost |
 

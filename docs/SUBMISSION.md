@@ -105,7 +105,7 @@ See [PROVENANCE.md](../PROVENANCE.md).
 
 ## Links
 
-- Code: `<https://github.com/ahmedsohail2003/buffalo-hackathon>`
+- Code: https://github.com/ahmedsohail2003/buffalo-hackathon/tree/claude/pensive-johnson-mek8ib (until the project is merged into `main`, which today holds only the starting README; after the merge, use https://github.com/ahmedsohail2003/buffalo-hackathon)
 - Live: `<https://your-domain>` on Vultr
 - Video (under 3 minutes): `<YouTube link>`
 
