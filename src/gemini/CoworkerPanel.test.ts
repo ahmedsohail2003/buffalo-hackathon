@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { makeFakeBay } from './__fixtures__/fakeBay';
 import { getGeminiClient } from './client';
-import { CoworkerPanel } from './CoworkerPanel';
+import type { ToolTrace } from './coworker';
+import { CoworkerPanel, replySound } from './CoworkerPanel';
 import { nullSink } from './types';
 
 describe('CoworkerPanel', () => {
@@ -20,5 +21,17 @@ describe('CoworkerPanel', () => {
     expect(html).toContain('$0.0014');
     const waiting = renderToStaticMarkup(createElement(CoworkerPanel, { bay: null, sink: nullSink }));
     expect(waiting).toContain('waiting for the bay');
+  });
+
+  it('a reply that stopped early plays the reject sound, even after a successful pick', () => {
+    const trace = (name: string, ok: boolean): ToolTrace => ({ name, args: {}, result: { ok }, summary: '' });
+    const pick = trace('pick_sample', true);
+    const refusedPlace = trace('place_sample', false);
+    expect(replySound({ tools: [pick, refusedPlace, refusedPlace], stopped: 'max_rounds' })).toBe('reject');
+    expect(replySound({ tools: [pick], stopped: 'aborted' })).toBe('reject');
+    expect(replySound({ tools: [], stopped: 'error' })).toBe('reject');
+    expect(replySound({ tools: [pick, trace('place_sample', true)] })).toBe('task-done');
+    expect(replySound({ tools: [refusedPlace] })).toBe('reject');
+    expect(replySound({ tools: [trace('describe_bay', true)] })).toBeNull();
   });
 });

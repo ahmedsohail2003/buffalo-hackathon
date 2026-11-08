@@ -511,7 +511,7 @@ function checkBaySummary(r: ToolResult): string {
 }
 
 /** text that ends in exactly one full stop (or the ? or ! it already has) */
-function sentence(s: string): string {
+export function sentence(s: string): string {
   const t = s.trim();
   return !t || /[.!?]$/.test(t) ? t : `${t}.`;
 }

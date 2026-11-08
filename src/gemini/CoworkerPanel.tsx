@@ -5,9 +5,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react';
 import type { BayApi, GeminiCallEntry, Sample } from '../contracts';
 import { getSpeaker, type SpeakerLike } from '../voice/elevenSpeaker';
-import { playSfx } from '../voice/sfx';
+import { playSfx, type SfxName } from '../voice/sfx';
 import { getGeminiClient, usingDevKey } from './client';
-import { Coworker } from './coworker';
+import { Coworker, type CoworkerReply } from './coworker';
 import { OFFLINE, getServerHealth, type ServerHealth } from './health';
 import { LiveVoice, type LiveOutput, type LiveState } from './live';
 import { isPriced, modelLabel } from './models';
@@ -86,6 +86,14 @@ const WHO_LABEL: Record<ChatItem['who'], string> = { operator: 'YOU', capcom: 'C
 
 function usd(v: number): string {
   return v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(3)}`;
+}
+
+/** The sound for a finished request: reject when it stopped early or a tool refused; done when a tool acted. */
+export function replySound(reply: Pick<CoworkerReply, 'tools' | 'stopped'>): SfxName | null {
+  if (reply.stopped) return 'reject';
+  if (reply.tools.some((t) => t.result.ok && t.name !== 'describe_bay' && t.name !== 'bay_status')) return 'task-done';
+  if (reply.tools.some((t) => !t.result.ok)) return 'reject';
+  return null;
 }
 
 export function CoworkerPanel(props: CoworkerPanelProps) {
@@ -203,8 +211,8 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
       const reply = await cw.ask(text);
       if (reply.text) add('capcom', reply.text);
       if (reply.text && !muted && elevenOk && reply.stopped !== 'busy') speaker.say(reply.text, 'coworker');
-      if (reply.tools.some((t) => t.result.ok && t.name !== 'describe_bay' && t.name !== 'bay_status')) playSfx('task-done');
-      else if (reply.tools.some((t) => !t.result.ok)) playSfx('reject');
+      const sound = replySound(reply);
+      if (sound) playSfx(sound);
     } finally {
       setBusy(false);
     }

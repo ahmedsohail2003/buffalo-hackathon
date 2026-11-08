@@ -6,7 +6,7 @@ import type { BayApi } from '../contracts';
 import { GeminiError, callGemini, errorText, type CallFn, type Content, type Part } from './client';
 import { BAY_FACTS_TEXT } from './bayFacts';
 import { FLASH, type ThinkingLevel } from './models';
-import { TOOL_DECLARATIONS, describeBay, dispatchTool, summarizeResult, type ToolContext, type ToolResult } from './tools';
+import { TOOL_DECLARATIONS, describeBay, dispatchTool, sentence, summarizeResult, type ToolContext, type ToolResult } from './tools';
 import { logTo, type LogSink } from './types';
 
 export const COWORKER_PROMPT = [
@@ -171,10 +171,10 @@ export class Coworker {
 
     const last = traces[traces.length - 1];
     if (!finalText) {
-      if (stopped === 'max_rounds') finalText = `Step limit reached after ${maxRounds} rounds.${last ? ` Last result: ${last.summary}.` : ''}`;
+      if (stopped === 'max_rounds') finalText = this.stepLimitReply(last, maxRounds);
       else if (stopped === 'aborted') finalText = this.abortReason || 'Request cancelled.';
-      else if (stopped === 'error') finalText = `Gemini is not answering: ${error}.${last ? ` Last result: ${last.summary}.` : ''}`;
-      else finalText = last ? `Last result: ${last.summary}.` : 'No reply from Gemini.';
+      else if (stopped === 'error') finalText = `Gemini is not answering: ${sentence(error ?? 'no reason given')}${last ? ` Last result: ${sentence(last.summary)}` : ''}`;
+      else finalText = last ? `Last result: ${sentence(last.summary)}` : 'No reply from Gemini.';
     }
 
     if (stopped !== 'aborted' && stopped !== 'error') {
@@ -191,4 +191,24 @@ export class Coworker {
     delete d.frame;
     return JSON.stringify(d);
   }
+
+  /**
+   * CAPCOM's reply when the step limit ends a request: "I could not finish: <short reason>. <what is
+   * in the gripper>." The reason is the first clause of the last refusal, else the step count.
+   */
+  private stepLimitReply(last: ToolTrace | undefined, maxRounds: number): string {
+    const refused = last && !last.result.ok && typeof last.result.reason === 'string' ? firstClause(last.result.reason) : '';
+    const why = refused || `the request needed more than ${maxRounds} steps`;
+    const heldId = this.bay.arm.snapshot().heldId;
+    const held = heldId ? ` ${this.bay.samples.get(heldId)?.name ?? heldId} is still in the gripper.` : '';
+    return `I could not finish: ${why}.${held}`;
+  }
+}
+
+/** The first clause of a reason ("that spot overlaps Itokawa by 24 mm; put it ..."), without closing punctuation. */
+function firstClause(reason: string): string {
+  return reason
+    .split(/;|\.\s/)[0]
+    .trim()
+    .replace(/[\s.,;:!?]+$/, '');
 }
