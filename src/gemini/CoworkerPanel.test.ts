@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +22,27 @@ describe('CoworkerPanel', () => {
     expect(html).toContain('$0.0014');
     const waiting = renderToStaticMarkup(createElement(CoworkerPanel, { bay: null, sink: nullSink }));
     expect(waiting).toContain('waiting for the bay');
+  });
+
+  it('fills its slot: the chat log takes the height left and scrolls; showLedger={false} leaves the ledger out', () => {
+    const html = renderToStaticMarkup(createElement(CoworkerPanel, { bay: makeFakeBay(), sink: nullSink, showLedger: false }));
+    const panel = html.match(/<section[^>]*style="([^"]*)"/)?.[1] ?? '';
+    expect(panel).toContain('height:100%');
+    expect(panel).toContain('box-sizing:border-box');
+    const log = html.match(/class="sh-cw-log" style="([^"]*)"/)?.[1] ?? '';
+    expect(log).toContain('flex:1');
+    expect(log).toContain('min-height:0');
+    expect(log).not.toContain('max-height');
+    expect(html).not.toContain('Gemini call ledger');
+    expect(html).toContain('Message to CAPCOM');
+    expect(html).toContain('TALK (hold)');
+  });
+
+  it('the app mounts it without its own ledger and gives the coworker and fabricator slots the room', () => {
+    expect(readFileSync('src/gemini/install.tsx', 'utf8')).toMatch(/<CoworkerPanel[^>]*showLedger=\{false\}/);
+    const css = readFileSync('src/styles.css', 'utf8');
+    const flex = (slot: string) => css.match(new RegExp(`\\.slot\\.${slot}\\s*\\{[^}]*?flex:\\s*([^;]+);`))?.[1].trim();
+    expect([flex('coworker'), flex('fabricator'), flex('samples')]).toEqual(['1.3 1 0', '1.3 1 0', '0.7 1 0']);
   });
 
   it('a reply that stopped early plays the reject sound, even after a successful pick', () => {

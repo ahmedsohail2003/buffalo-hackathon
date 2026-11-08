@@ -1,5 +1,5 @@
 // CAPCOM panel: chat with the Gemini coworker (typed), hold TALK for Live voice, choose the voice
-// (ElevenLabs or Gemini native), mute, and a compact ledger of every Gemini call.
+// (ElevenLabs or Gemini native), mute, and (unless showLedger is false) a compact ledger of every Gemini call.
 // Props: the bay (null until the arm core is up) and the log sink; optionally the fabricator and
 // the registry's containment check. Class names start with sh-cw- for the shell's theme.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent } from 'react';
@@ -21,6 +21,8 @@ export interface CoworkerPanelProps {
   inContainment?: (s: Sample) => boolean;
   /** defaults to the shared ElevenLabs speaker */
   speaker?: SpeakerLike;
+  /** the panel's own Gemini call ledger (default true; the app shows a global one) */
+  showLedger?: boolean;
   className?: string;
   style?: CSSProperties;
 }
@@ -58,21 +60,38 @@ const c = {
   bad: 'var(--sh-bad, #f87171)',
 };
 
+// The panel fills its slot: the chat log takes the height that is left and scrolls; the header,
+// the input and the voice rows keep their size, so they stay in view at the bottom.
 const s: Record<string, CSSProperties> = {
-  panel: { display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: c.panel, color: c.text, border: `1px solid ${c.border}`, borderRadius: 8, minHeight: 0, font: 'inherit' },
-  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
+  panel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    padding: 12,
+    background: c.panel,
+    color: c.text,
+    border: `1px solid ${c.border}`,
+    borderRadius: 8,
+    height: '100%',
+    minHeight: 0,
+    boxSizing: 'border-box',
+    font: 'inherit',
+  },
+  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', flex: 'none' },
   title: { fontWeight: 600, letterSpacing: '0.04em', whiteSpace: 'nowrap' },
   chips: { display: 'flex', gap: 6, flexWrap: 'wrap' },
   chip: { fontSize: 11, padding: '2px 8px', borderRadius: 999, border: `1px solid ${c.border}`, color: c.dim },
-  log: { flex: 1, minHeight: 120, maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, lineHeight: 1.35 },
-  note: { fontSize: 12, color: c.warn, border: `1px solid ${c.warn}`, borderRadius: 6, padding: '4px 8px' },
-  form: { display: 'flex', gap: 6 },
+  log: { flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, lineHeight: 1.35 },
+  note: { fontSize: 12, color: c.warn, border: `1px solid ${c.warn}`, borderRadius: 6, padding: '4px 8px', flex: 'none' },
+  form: { display: 'flex', gap: 6, flex: 'none' },
   input: { flex: 1, minWidth: 0, padding: '6px 8px', background: 'transparent', color: c.text, border: `1px solid ${c.border}`, borderRadius: 6, font: 'inherit' },
   button: { padding: '6px 12px', background: 'transparent', color: c.text, border: `1px solid ${c.border}`, borderRadius: 6, font: 'inherit', cursor: 'pointer' },
-  row: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' },
+  /** the voice-choice and mute buttons: narrow enough to share one row in the projector layout */
+  small: { padding: '6px 8px', fontSize: 12 },
+  row: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flex: 'none' },
   talk: { flex: 1, minWidth: 140, padding: '10px 12px', fontWeight: 600, borderRadius: 6, font: 'inherit', cursor: 'pointer', userSelect: 'none', touchAction: 'none' },
   seg: { display: 'inline-flex', border: `1px solid ${c.border}`, borderRadius: 6, overflow: 'hidden' },
-  ledger: { fontSize: 11, color: c.dim, borderTop: `1px solid ${c.border}`, paddingTop: 6, fontVariantNumeric: 'tabular-nums' },
+  ledger: { fontSize: 11, color: c.dim, borderTop: `1px solid ${c.border}`, paddingTop: 6, fontVariantNumeric: 'tabular-nums', flex: 'none' },
   ledgerRow: { display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: 8 },
 };
 
@@ -105,7 +124,7 @@ export function requestNote(busy: boolean, state: BayState | null): string | nul
 }
 
 export function CoworkerPanel(props: CoworkerPanelProps) {
-  const { bay, className, style } = props;
+  const { bay, className, style, showLedger = true } = props;
   const propsRef = useRef(props);
   propsRef.current = props;
   const speaker = useMemo(() => props.speaker ?? getSpeaker(), [props.speaker]);
@@ -302,7 +321,9 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
   return (
     <section className={`sh-cw ${className ?? ''}`} style={{ ...s.panel, ...style }} aria-label="CAPCOM, the Gemini coworker">
       <header style={s.head}>
-        <span style={s.title}>CAPCOM · Gemini coworker</span>
+        <span style={s.title} title="CAPCOM, the Gemini coworker">
+          CAPCOM
+        </span>
         <span style={s.chips}>
           <span className="sh-cw-chip" style={{ ...s.chip, color: geminiMode === 'offline' ? c.bad : c.dim }} title="How this browser reaches Gemini">
             Gemini: {geminiMode}
@@ -392,7 +413,7 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
             <button
               key={mode}
               type="button"
-              style={{ ...s.button, border: 'none', borderRadius: 0, background: output === mode ? c.border : 'transparent', fontSize: 12 }}
+              style={{ ...s.button, ...s.small, border: 'none', borderRadius: 0, background: output === mode ? c.border : 'transparent' }}
               aria-pressed={output === mode}
               disabled={mode === 'elevenlabs' && !elevenOk}
               title={mode === 'elevenlabs' && !elevenOk ? 'ElevenLabs is not configured on the server' : undefined}
@@ -402,27 +423,29 @@ export function CoworkerPanel(props: CoworkerPanelProps) {
             </button>
           ))}
         </span>
-        <button type="button" style={{ ...s.button, fontSize: 12 }} aria-pressed={muted} onClick={toggleMute}>
+        <button type="button" style={{ ...s.button, ...s.small }} aria-pressed={muted} onClick={toggleMute}>
           {muted ? 'Unmute' : 'Mute'}
         </button>
       </div>
 
-      <div className="sh-cw-ledger" style={s.ledger} aria-label="Gemini call ledger">
-        <div style={{ ...s.ledgerRow, color: c.text, marginBottom: 2 }}>
-          <span>Gemini calls: {ledger.length}</span>
-          <span />
-          <span />
-          <span>{usd(total)}</span>
-        </div>
-        {recent.map((e, i) => (
-          <div key={ledger.length - i} style={{ ...s.ledgerRow, color: e.ok ? c.dim : c.bad }} title={e.error}>
-            <span>{modelLabel(e.model)}</span>
-            <span>{e.purpose}</span>
-            <span>{e.latencyMs} ms</span>
-            <span>{isPriced(e.model) ? usd(e.costUsd) : 'n/a'}</span>
+      {showLedger && (
+        <div className="sh-cw-ledger" style={s.ledger} aria-label="Gemini call ledger">
+          <div style={{ ...s.ledgerRow, color: c.text, marginBottom: 2 }}>
+            <span>Gemini calls: {ledger.length}</span>
+            <span />
+            <span />
+            <span>{usd(total)}</span>
           </div>
-        ))}
-      </div>
+          {recent.map((e, i) => (
+            <div key={ledger.length - i} style={{ ...s.ledgerRow, color: e.ok ? c.dim : c.bad }} title={e.error}>
+              <span>{modelLabel(e.model)}</span>
+              <span>{e.purpose}</span>
+              <span>{e.latencyMs} ms</span>
+              <span>{isPriced(e.model) ? usd(e.costUsd) : 'n/a'}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
