@@ -70,7 +70,7 @@ STARHAND is a sample-curation bay on a deep-space station, running in your brows
 
 - **A tested end-to-end loop on the real SO-101 kinematics.** A simulated hand steers the arm to within 0.1 mm of a sample. One pinch picks it, a second pinch stows it in containment, and mission control says "Sample secured in containment."
 - **Physically plausible AI-made objects.** Every sample on the deck fits the real gripper: an iron meteorite designed at 204 g is shrunk to 90 g, and an antenna boom is refused with a reason.
-- **About 245 automated tests**, written during the event.
+- **About 330 automated tests**, written during the event, plus probes that drove the app against the real Gemini API in a browser.
 
 ## What we learned (new skills)
 
