@@ -8,6 +8,11 @@ import { getSpeaker } from './elevenSpeaker';
 import { playSfx } from './sfx';
 import { getServerHealth } from '../gemini/health';
 
+/** The mission-log line for a callout: marked when the mission voice is broken or offline, so nothing was said. */
+export function calloutLogText(text: string, speaker: { readonly broken: boolean }): string {
+  return speaker.broken ? `${text} (voice offline)` : text;
+}
+
 export function startAnnouncer(source: LogSource, log?: (line: LogLine) => void, egress?: (rec: EgressNote) => void): Announcer {
   const speaker = getSpeaker();
   if (log && !speaker.onError) speaker.onError = (message) => log({ t: Date.now(), kind: 'voice', text: message });
@@ -16,7 +21,7 @@ export function startAnnouncer(source: LogSource, log?: (line: LogLine) => void,
     speaker,
     onSpoken: (c) => {
       if (c.priority === 'estop') playSfx('estop');
-      log?.({ t: Date.now(), kind: 'voice', text: c.text });
+      log?.({ t: Date.now(), kind: 'voice', text: calloutLogText(c.text, speaker) });
     },
   });
   announcer.attach(source);

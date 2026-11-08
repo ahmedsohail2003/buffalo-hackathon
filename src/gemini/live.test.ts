@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GeminiCallEntry } from '../contracts';
+import type { GeminiCallEntry, LogLine } from '../contracts';
+import { calloutLogText, startAnnouncer } from '../voice';
 import type { SpeakerLike } from '../voice/elevenSpeaker';
 import { makeFakeBay, makeSample } from './__fixtures__/fakeBay';
 import { LIVE_PROMPT, LiveVoice, buildLiveConfig, fetchLiveToken, type LiveCallbacksLite, type LiveConnector, type LiveSessionLike, type MicLike, type PlayerLike } from './live';
@@ -673,5 +674,33 @@ describe('Voice conversation in the mission log', () => {
       'YOU: Pick up the Bennu fragment.',
       'CAPCOM: Picking it',
     ]);
+  });
+});
+
+describe('Mission-control callouts in the log (voice/index)', () => {
+  it('a callout the offline mission voice could not speak is logged "(voice offline)"', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }); // the 30 s health re-check
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true, gemini: true, elevenlabs: false, live: true }), { status: 200 }));
+    try {
+      const lines: string[] = [];
+      let emit: (l: LogLine) => void = () => {};
+      const announcer = startAnnouncer(
+        (cb) => {
+          emit = cb;
+          return () => {};
+        },
+        (l) => void lines.push(`${l.kind}:${l.text}`),
+      );
+      await settle();
+      emit({ t: 0, kind: 'safety', text: 'CYCLE_START (gesture): IDLE -> RUNNING. Cycle started.' });
+      expect(lines).toContain('voice:Cycle start. (voice offline)');
+      expect(lines).not.toContain('voice:Cycle start.');
+      announcer.dispose();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+    expect(calloutLogText('Cycle start.', { broken: false })).toBe('Cycle start.'); // spoken: logged as said
+    expect(calloutLogText('Cycle start.', { broken: true })).toBe('Cycle start. (voice offline)');
   });
 });
