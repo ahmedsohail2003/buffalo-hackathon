@@ -1,7 +1,8 @@
 // Fabricator panel: describe a sample or click a preset; code builds it, measures it, scales it into the
 // gripper's limits or refuses, then the registry places it on the deck. Presets always work offline.
+// The result card sits right under the input, above the presets, and scrolls into view when it changes.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import type { BayApi, MeshInfo, Rejection } from '../contracts';
 import { designAndFabricate, type Designed, type GenerateJson } from './designer';
 import { fabricatePreset, type FabRejection, type Placed } from './fabricate';
@@ -82,28 +83,90 @@ export function FabricatorPanel({ bay, generateJson, log }: Props) {
     }
   }, [bay]);
 
+  const designing = busy === 'design';
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (card || designing) revealCard(cardRef.current);
+  }, [card, designing]);
+
+  return (
+    <FabricatorView
+      ready={!!bay}
+      online={!!generateJson}
+      text={text}
+      onText={setText}
+      onDesign={() => void design()}
+      onPreset={(id) => void runPreset(id)}
+      busy={busy}
+      card={card}
+      pickNote={pickNote}
+      onPick={(id) => void pickToBin(id)}
+      cardRef={cardRef}
+    />
+  );
+}
+
+/** Scroll the card into view inside the scrolling Mission slot, moving as little as possible. */
+export function revealCard(el: Pick<Element, 'scrollIntoView'> | null): void {
+  el?.scrollIntoView({ block: 'nearest' });
+}
+
+export interface FabricatorViewProps {
+  /** the bay is there */
+  ready: boolean;
+  /** Gemini is connected (else designs fall back to the closest preset) */
+  online: boolean;
+  text: string;
+  onText: (text: string) => void;
+  onDesign: () => void;
+  onPreset: (id: string) => void;
+  /** 'design', 'pick' or the id of the preset being made; null when idle */
+  busy: string | null;
+  card: Card | null;
+  pickNote: string | null;
+  onPick: (id: string) => void;
+  cardRef?: Ref<HTMLDivElement>;
+}
+
+/** The panel for a given state: the input, then the result card (or "Designing…"), then the presets. */
+export function FabricatorView({ ready, online, text, onText, onDesign, onPreset, busy, card, pickNote, onPick, cardRef }: FabricatorViewProps) {
+  const designing = busy === 'design';
   return (
     <section className="fab" aria-label="Fabricator">
       <header className="fab-head">
         <h3>Fabricator</h3>
         <span className="fab-sub">Gemini designs · code measures and decides</span>
       </header>
-      <form className="fab-row" onSubmit={(e) => { e.preventDefault(); void design(); }}>
-        <input className="fab-input" value={text} onChange={(e) => setText(e.target.value)} placeholder="Describe a sample…" aria-label="Describe a sample" />
-        <button type="submit" className="fab-btn primary" disabled={!bay || !!busy || !text.trim()} title={generateJson ? 'Gemini designs a shape program; code builds, measures and checks it' : 'Gemini needs a key; offline this fabricates the closest preset'}>
-          {busy === 'design' ? 'Designing…' : 'Design with Gemini'}
+      <form className="fab-row" onSubmit={(e) => { e.preventDefault(); onDesign(); }}>
+        <input className="fab-input" value={text} onChange={(e) => onText(e.target.value)} placeholder="Describe a sample…" aria-label="Describe a sample" />
+        <button type="submit" className="fab-btn primary" disabled={!ready || !!busy || !text.trim()} title={online ? 'Gemini designs a shape program; code builds, measures and checks it' : 'Gemini needs a key; offline this fabricates the closest preset'}>
+          {designing ? 'Designing…' : 'Design with Gemini'}
         </button>
       </form>
-      {!generateJson && <div className="fab-note">Gemini is not connected, so designs fall back to the closest preset. Presets always work.</div>}
+      {!online && <div className="fab-note">Gemini is not connected, so designs fall back to the closest preset. Presets always work.</div>}
+      {(designing || card) && (
+        <div className="fab-slot" ref={cardRef}>
+          {designing ? <DesigningCard /> : card && <ResultCard card={card} busy={!!busy} onPick={onPick} pickNote={pickNote} />}
+        </div>
+      )}
       <div className="fab-chips" role="group" aria-label="Sample presets">
         {PRESETS.map((p) => (
-          <button key={p.id} type="button" className={`fab-chip${p.source === 'nasa' ? ' nasa' : ''}`} disabled={!bay || !!busy} onClick={() => void runPreset(p.id)} title={p.description}>
+          <button key={p.id} type="button" className={`fab-chip${p.source === 'nasa' ? ' nasa' : ''}`} disabled={!ready || !!busy} onClick={() => onPreset(p.id)} title={p.description}>
             {busy === p.id ? '…' : p.label}
           </button>
         ))}
       </div>
-      {card && <ResultCard card={card} busy={!!busy} onPick={pickToBin} pickNote={pickNote} />}
     </section>
+  );
+}
+
+/** Stands in for the card while Gemini designs (the old card would describe the previous sample). */
+function DesigningCard() {
+  return (
+    <div className="fab-card busy" aria-label="Fabricator result" role="status" aria-busy="true">
+      <span className="fab-name">Designing…</span>
+      <span className="fab-sub">Gemini drafts a shape program; code then measures it and decides.</span>
+    </div>
   );
 }
 
@@ -120,26 +183,27 @@ export function ResultCard({ card, busy, onPick, pickNote }: { card: Card; busy:
   }
   const m = card.sample.mesh!;
   const overall = m.scale * (card.fab.program.design_scale ?? 1); // against the real design size
+  // name, numbers and Pick first: the Mission slot shows only about 200 px of a card that can be taller
   return (
     <div className="fab-card ok" aria-label="Fabricator result" role="status">
       <div className="fab-card-head">
         <span className="fab-name">{card.sample.name}</span>
         <span className="fab-src">{SOURCE_LABEL[card.source ?? m.source]}{card.latencyMs ? ` · ${(card.latencyMs / 1000).toFixed(1)} s` : ''} · {card.sample.id}</span>
       </div>
-      {card.note && <div className="fab-note">{card.note}</div>}
       <div className="fab-metrics">
         <span><b>{m.graspWidthMm.toFixed(0)}</b> mm across the jaw</span>
         <span><b>{m.heightMm.toFixed(0)}</b> mm tall</span>
         <span><b>{m.massG.toFixed(0)}</b> g</span>
         <span className={overall === 1 ? '' : 'scaled'}>scale <b>{pct(overall)}</b></span>
       </div>
-      <ul className="fab-reasons">
-        {card.reasons.map((r, i) => <li key={i} className={i === 0 ? 'lead' : ''}>{i === 0 ? '✓ ' : ''}{r}</li>)}
-      </ul>
       <div className="fab-row">
         <button type="button" className="fab-btn" disabled={busy} onClick={() => onPick(card.sample.id)}>Pick → containment</button>
         {pickNote && <span className="fab-sub">{pickNote}</span>}
       </div>
+      {card.note && <div className="fab-note">{card.note}</div>}
+      <ul className="fab-reasons">
+        {card.reasons.map((r, i) => <li key={i} className={i === 0 ? 'lead' : ''}>{i === 0 ? '✓ ' : ''}{r}</li>)}
+      </ul>
     </div>
   );
 }
