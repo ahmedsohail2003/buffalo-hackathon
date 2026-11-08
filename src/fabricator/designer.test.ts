@@ -106,6 +106,15 @@ describe('designer (Gemini proposes, code decides)', () => {
     expect(u.ok && u.note).toMatch(/the repair turn did not answer; fabricated the closest preset/);
   });
 
+  it('a repaired design the registry cannot place: the refusal names it and keeps the repair note', async () => {
+    const bay = fakeBay({ reject: { ok: false, code: 'BAY_FULL', reason: 'none of the default spots is free for a part this size' } });
+    const { gen, calls } = fake(NEEDLE, SHORT_ROD);
+    const r = await designAndFabricate(bay, 'a whip antenna', undefined, { generateJson: gen });
+    expect(calls).toHaveLength(2);
+    expect(r).toMatchObject({ ok: false, code: 'BAY_FULL', program: { name: 'Antenna stub' } });
+    expect(!r.ok && r.note).toMatch(/^Gemini repaired its design after the guardrail said: it is too tall and thin/);
+  });
+
   it('a placement refusal from the registry is returned as is, with no repair turn', async () => {
     const bay = fakeBay({ reject: { ok: false, code: 'TOO_CLOSE_TO', reason: 'that is only 20 mm from Bennu fragment', suggestion: 'put it 80 mm away instead?' } });
     const { gen, calls } = fake(BENNU);
