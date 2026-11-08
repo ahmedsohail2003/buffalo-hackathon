@@ -112,8 +112,9 @@ export function calloutFor(line: LogLine): Callout | null {
   // from free text: Gemini's tool arguments and camera observations are logged as kind 'gemini'.
   const released = line.kind === 'info' ? text.match(/^released (.+) on the containment$/) : null;
   if (released) {
-    const raw = released[1].trim().slice(0, 40);
-    const name = raw ? raw[0].toUpperCase() + raw.slice(1) : 'Sample';
+    // A name's own parenthetical ("Bennu (NASA shape model)") is not spoken, as in fabricatorSummary.
+    const raw = released[1].replace(/\s*\([^)]*\)/g, '').trim().slice(0, 40);
+    const name = raw ? capitalised(raw) : 'Sample';
     return { text: `${name} secured in containment.`, priority: 'normal', key: 'containment' };
   }
   if (line.kind === 'fabricator' && /fabricat|materiali[sz]/.test(t) && !negative) {
