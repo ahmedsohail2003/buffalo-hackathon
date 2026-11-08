@@ -24,6 +24,7 @@ import {
   ATTACH_BAND,
   ATTACH_XY_TOL,
   bearingOf,
+  polarXY,
   rhoOf,
 } from './constants';
 
@@ -56,6 +57,19 @@ export interface RegistryOptions {
 
 const mm = (m: number): string => `${Math.round(m * 1000)} mm`;
 const deg = (r: number): string => `${Math.round((r * 180) / Math.PI)} degrees`;
+
+/**
+ * Where the registry looks for a free deck spot, in order: the five SLOTS, then the whole reach band,
+ * rho 140-190 mm in 10 mm steps by bearings -80 to +80 degrees in 5 degree steps, nearest straight
+ * ahead first, then nearest the 165 mm arc (then right before left, outer before inner). Every spot
+ * still goes through checkSpot: reach, the bin keep-out, spacing and the IK probe.
+ */
+export const SEARCH_SPOTS: readonly [number, number][] = (() => {
+  const band: { rho: number; bearing: number }[] = [];
+  for (let rho = 140; rho <= 190; rho += 10) for (let bearing = -80; bearing <= 80; bearing += 5) band.push({ rho, bearing });
+  band.sort((a, b) => Math.abs(a.bearing) - Math.abs(b.bearing) || Math.abs(a.rho - 165) - Math.abs(b.rho - 165) || b.bearing - a.bearing || b.rho - a.rho);
+  return [...SLOTS, ...band.map((s) => polarXY(s.rho / 1000, (s.bearing * Math.PI) / 180))];
+})();
 
 function reject(code: ValidationCode | string, reason: string, suggestion?: string): Rejection {
   return suggestion ? { ok: false, code, reason, suggestion } : { ok: false, code, reason };
@@ -201,11 +215,11 @@ export class SampleRegistry implements SampleApi {
       }
       return { x: base[0] + v[dir][0] * dist, y: base[1] + v[dir][1] * dist };
     }
-    // first free slot that passes every check
-    for (const [x, y] of SLOTS) {
+    // the first spot that passes every check: the slots, then the rest of the reach band
+    for (const [x, y] of SEARCH_SPOTS) {
       if (this.checkSpot(x, y, dims, gripMm, 0, null) === null) return { x, y };
     }
-    return reject('BAY_FULL', 'none of the default spots is free for a part this size.', 'give x_mm and y_mm inside the reach band, or remove a sample');
+    return reject('BAY_FULL', 'there is no free spot on the deck for a part this size.', 'stow a sample in containment first');
   }
 
   /** placement checks shared by createPrimitive and createMesh; null when the spot is fine */

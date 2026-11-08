@@ -111,22 +111,24 @@ describe('SampleRegistry', () => {
     expect(arm.ok && arm.sample.pos[1]).toBeCloseTo(-0.08, 9);
   });
 
-  it(`holds at most ${MAX_SAMPLES} samples and says when no default spot is free`, () => {
+  it(`holds at most ${MAX_SAMPLES} samples; past the slots the default spot comes from the reach band`, () => {
     const reg = new SampleRegistry();
-    const made = [];
-    for (let i = 0; i < 4; i++) made.push(reg.createPrimitive(box(20, 20)));
-    expect(made.every((m) => m.ok)).toBe(true);
-    const full = rej(reg.createPrimitive(box(20, 20)));
-    expect(full.code).toBe('BAY_FULL');
-    oneSentence(full.reason);
-    // three more on the outer edge, between the slots
-    for (const d of [10, 30, 50]) {
-      const [x, y] = polarXY(0.199, (d * Math.PI) / 180);
-      expect(reg.createPrimitive(box(15, 20, { depth_mm: 15, x_mm: x * 1000, y_mm: y * 1000 })).ok).toBe(true);
+    for (let i = 1; i < MAX_SAMPLES - 1; i++) {
+      const r = reg.createPrimitive(box(15, 20, { depth_mm: 15 }));
+      expect(r.ok, `sample ${i + 1}`).toBe(true);
+      if (r.ok && i >= SLOTS.length) expect(SLOTS.some(([x, y]) => x === r.sample.pos[0] && y === r.sample.pos[1])).toBe(false);
     }
+    const at = (deg: number) => {
+      const [x, y] = polarXY(0.199, (deg * Math.PI) / 180);
+      return { depth_mm: 15, x_mm: x * 1000, y_mm: y * 1000 };
+    };
+    expect(reg.createPrimitive(box(15, 20, at(10))).ok).toBe(true);
     expect(reg.list().length).toBe(MAX_SAMPLES);
-    const [x, y] = polarXY(0.135, 0.2);
-    expect(rej(reg.createPrimitive(box(15, 20, { depth_mm: 15, x_mm: x * 1000, y_mm: y * 1000 }))).reason).toContain(`${MAX_SAMPLES} samples`);
+    // a free spot, but the registry is full
+    const full = rej(reg.createPrimitive(box(15, 20, at(30))));
+    expect(full.code).toBe('BAY_FULL');
+    expect(full.reason).toContain(`${MAX_SAMPLES} samples`);
+    oneSentence(full.reason);
   });
 
   it('uses the injected reach probe as the last check', () => {

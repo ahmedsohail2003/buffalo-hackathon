@@ -1,24 +1,15 @@
 // The containment bin with the real arm (IK, motion queue, registry) and real fabricated samples:
 // samples fill the floor from the corners, and stack only once the floor is full.
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { BayApi, MoveResult, Sample } from '../contracts';
+import type { MoveResult, Sample } from '../contracts';
 import { fabricatePreset } from '../fabricator';
 import { registerNasaAssets } from '../fabricator/testkit';
 import { CONTAINMENT_FLOOR_Z, CONTAINMENT_INNER, CONTAINMENT_XY, STACK_MAX_H, polarXY } from './constants';
 import type { Bay } from './index';
 import { sampleRadius } from './samples';
-import { dist2, makeBay, runUntil } from './testutil';
+import { bayApi, dist2, makeBay, runUntil } from './testutil';
 
 beforeAll(registerNasaAssets);
-
-const bayApi = (bay: Bay): BayApi => ({
-  arm: bay.arm,
-  samples: bay.samples,
-  gate: bay.gate,
-  capture: () => ({ jpegB64: '', w: 0, h: 0, t: 0 }),
-  project: () => [0, 0],
-  unproject: () => null,
-});
 
 async function stow(bay: Bay, id: string): Promise<MoveResult> {
   expect(await runUntil(bay, bay.arm.pick(id)), `pick ${id}`).toMatchObject({ ok: true, held: id });

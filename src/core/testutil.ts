@@ -1,6 +1,19 @@
 // Test helpers (node): load the arm data once and run the arm on a simulated clock.
+import type { BayApi } from '../contracts';
 import type { So101Data } from './model';
 import { createBay, loadArmDataNode, type Bay, type CreateBayOptions } from './index';
+
+/** the public BayApi over a core bay, as the app builds it (no camera) */
+export function bayApi(bay: Bay): BayApi {
+  return {
+    arm: bay.arm,
+    samples: bay.samples,
+    gate: bay.gate,
+    capture: () => ({ jpegB64: '', w: 0, h: 0, t: 0 }),
+    project: () => [0, 0],
+    unproject: () => null,
+  };
+}
 
 let cached: So101Data | null = null;
 export async function armData(): Promise<So101Data> {
