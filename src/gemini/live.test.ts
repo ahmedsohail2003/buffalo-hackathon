@@ -583,3 +583,37 @@ describe('Live ledger latency', () => {
     expect(r.entries[1].latencyMs).toBe(530);
   });
 });
+
+describe('Voice conversation in the mission log', () => {
+  it('logs one voice line per side per turn ("YOU: ...", "CAPCOM: ..."), at the turn end or the barge-in', async () => {
+    const r = rig();
+    const said = () => r.voiceLogs().filter((l) => /^(YOU|CAPCOM): /.test(l));
+    await r.live.connect();
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk();
+    r.server().onmessage({ serverContent: { inputTranscription: { text: ' Mission control, what is' } } });
+    r.server().onmessage({ serverContent: { inputTranscription: { text: ' the bay status?' } } });
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'The bay is IDLE.' } } });
+    r.server().onmessage({ serverContent: { outputTranscription: { text: ' The arm is idle.' } } });
+    expect(said()).toEqual([]); // nothing until the turn ends
+    r.server().onmessage({ serverContent: { turnComplete: true } });
+    r.live.sendBayEvent('Bay state is now RUNNING.'); // a telemetry turn has only CAPCOM's side
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Copy, the bay is running.' }, turnComplete: true } });
+    r.live.startTalk();
+    r.mic(LOUD);
+    r.live.endTalk();
+    r.server().onmessage({ serverContent: { inputTranscription: { text: 'Pick up the Bennu fragment.' } } });
+    r.server().onmessage({ serverContent: { outputTranscription: { text: 'Picking it' } } });
+    r.live.startTalk(); // the operator cuts in
+    r.mic(LOUD);
+    r.server().onmessage({ serverContent: { interrupted: true } });
+    expect(said()).toEqual([
+      'YOU: Mission control, what is the bay status?',
+      'CAPCOM: The bay is IDLE. The arm is idle.',
+      'CAPCOM: Copy, the bay is running.',
+      'YOU: Pick up the Bennu fragment.',
+      'CAPCOM: Picking it',
+    ]);
+  });
+});

@@ -378,6 +378,9 @@ export class LiveVoice {
   /** the first server message that answers the turn: audio, words, a tool call or the turn's end */
   private firstReplyAt = 0;
   private turnUsage: LiveMessageLite['usageMetadata'] | null = null;
+  /** this turn's words so far, for the mission log: the operator's and CAPCOM's */
+  private heard = '';
+  private said = '';
 
   constructor(opts: LiveVoiceOptions) {
     this.bay = opts.bay;
@@ -444,6 +447,7 @@ export class LiveVoice {
   }
 
   disconnect(): void {
+    this.logTranscript(); // what was said before the cut still reaches the log
     this.attempt++;
     this.generation++;
     this.closing = true;
@@ -760,12 +764,17 @@ export class LiveVoice {
       if (sc.interrupted) {
         this.speaker?.cancel();
         this.player.stop();
+        this.logTranscript(); // a barge-in ends CAPCOM's turn here
       }
       const heard = sc.inputTranscription?.text;
-      if (heard) this.events.onTranscript?.('operator', heard);
+      if (heard) {
+        this.heard += heard;
+        this.events.onTranscript?.('operator', heard);
+      }
       // CAPCOM is not heard over the operator: while TALK is held its audio is dropped.
       const said = sc.outputTranscription?.text;
       if (said) {
+        this.said += said;
         this.markOutput();
         this.events.onTranscript?.('capcom', said);
         if (this.useEleven() && !this.talking) this.speaker?.push(said, 'coworker');
@@ -807,9 +816,20 @@ export class LiveVoice {
     }
     this.turnStart = 0;
     this.firstReplyAt = 0;
+    this.logTranscript();
     this.events.onTurnEnd?.();
     if (!this.operatorTurn()) this.rest();
     this.flushOutbox();
+  }
+
+  /** The turn's words go to the mission log (and so the export): one 'voice' line per side. */
+  private logTranscript(): void {
+    const you = this.heard.replace(/\s+/g, ' ').trim();
+    const capcom = this.said.replace(/\s+/g, ' ').trim();
+    this.heard = '';
+    this.said = '';
+    if (you) logTo(this.sink, 'voice', `YOU: ${you}`);
+    if (capcom) logTo(this.sink, 'voice', `CAPCOM: ${capcom}`);
   }
 
   private respond(id: string | undefined, name: string, response: ToolResult, scheduling?: 'SILENT' | 'WHEN_IDLE' | 'INTERRUPT'): void {
