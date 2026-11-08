@@ -1,7 +1,11 @@
 // Sample meshes: one per registry entry. The registry is ground truth; this layer only draws it.
 // Poses are read every frame (the core moves a held sample with the jaw without emitting onChange).
+// Name tags of samples resting in the containment bin stay hidden unless the sample is the newest
+// arrival there or under the pointer (labelLayout.ts); the view staggers the visible ones.
 import * as THREE from 'three';
 import type { Sample, SampleApi } from '../contracts';
+import { inContainment } from '../core/constants';
+import { BinArrivals, tagHidden, type PlacedTag } from './labelLayout';
 import { LABEL_GAP, disposeLabelSprite, makeLabelSprite } from './labelSprite';
 import { buildRegisteredSample, onSampleGeometryChange } from './registry';
 
@@ -80,14 +84,27 @@ function buildLook(s: Sample): Look {
   };
 }
 
+/** Resting (not held) inside the containment bin. */
+function restingInBin(s: Sample): boolean {
+  return !s.held && inContainment(s.pos[0], s.pos[1]);
+}
+
 export class SampleLayer {
   readonly group = new THREE.Group();
   private items = new Map<string, Item>();
   private dirty = true;
   private lastRetry = 0;
   private offs: (() => void)[] = [];
+  private arrivals = new BinArrivals();
+  private hovered: string | null = null;
+  /** sample ids in registry order, as of the last sync */
+  private order: string[] = [];
 
-  constructor(private api: SampleApi) {
+  /** makeTag draws a name tag (tests pass one that needs no canvas). */
+  constructor(
+    private api: SampleApi,
+    private makeTag: (text: string) => THREE.Sprite = makeLabelSprite,
+  ) {
     this.group.name = 'samples';
     this.offs.push(api.onChange(() => (this.dirty = true)));
     this.offs.push(
@@ -113,13 +130,40 @@ export class SampleLayer {
       }
       if (this.dirty) this.reconcile();
     }
-    for (const s of this.api.list()) {
+    const list = this.api.list();
+    const newest = this.arrivals.update(list.map((s) => ({ id: s.id, inBin: restingInBin(s) })));
+    this.order = list.map((s) => s.id);
+    for (const s of list) {
       const item = this.items.get(s.id);
       if (!item) continue;
       item.mesh.position.set(s.pos[0], s.pos[1], s.pos[2]);
       item.mesh.rotation.set(0, 0, s.yaw);
       item.label.position.set(s.pos[0], s.pos[1], s.pos[2] + s.dims.h / 2 + LABEL_GAP);
+      item.label.visible = !tagHidden(s.id, restingInBin(s), newest, this.hovered);
     }
+  }
+
+  /** The sample under the pointer (its tag shows even in the bin); null for none. */
+  setHovered(id: string | null): void {
+    this.hovered = id;
+  }
+
+  /** The sample whose mesh the ray hits first, or null. */
+  pick(ray: THREE.Raycaster): string | null {
+    this.group.updateMatrixWorld();
+    const hit = ray.intersectObjects([...this.items.values()].map((i) => i.mesh), false)[0];
+    const id = hit?.object.userData.sampleId;
+    return typeof id === 'string' ? id : null;
+  }
+
+  /** The visible name tags in registry order (earlier samples keep their place when tags overlap). */
+  tags(): PlacedTag[] {
+    const out: PlacedTag[] = [];
+    for (const id of this.order) {
+      const item = this.items.get(id);
+      if (item?.label.visible) out.push({ id, sprite: item.label });
+    }
+    return out;
   }
 
   private reconcile(): void {
@@ -137,7 +181,7 @@ export class SampleLayer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData.sampleId = s.id;
-      const label = makeLabelSprite(s.name);
+      const label = this.makeTag(s.name);
       this.group.add(mesh, label);
       this.items.set(s.id, { mesh, label, key, ownsGeometry: look.ownsGeometry, placeholder: look.placeholder });
     }

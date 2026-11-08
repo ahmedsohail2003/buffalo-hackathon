@@ -142,6 +142,8 @@ export function createErMarker(root: THREE.Object3D, labelFactory: MarkerLabelFa
     label.material.depthTest = false;
     label.material.toneMapped = false;
     label.position.set(...at.label);
+    // staggered right after the pointed-at sample's own tag, so the two stay together
+    if (ev.sample_id) label.userData.tagAfter = ev.sample_id;
     root.add(label);
     shown = { ev, at: now, label };
     group.visible = true;
@@ -176,6 +178,10 @@ export function erMarkerHook(
     const off = subscribe((ev) => marker.show(ev, clock()));
     return {
       update: () => marker.update(clock()),
+      labels: () => {
+        const l = marker.label();
+        return l ? [l] : [];
+      },
       dispose: () => {
         off();
         marker.dispose();

@@ -10,7 +10,8 @@ import type { SceneLink } from '../app/runtime';
 import { BAY_CAPTURE_SIZE, type BayCameraModel } from './bayCamera';
 import { buildContainment, buildDeck } from './deck';
 import { VIEW_ONLY, buildSpaceEnvironment, type SpaceEnvironment } from './environment';
-import { onSceneHooksChange, registeredSceneHooks, type SceneHook } from './registry';
+import { LabelStagger, orderTags } from './labelLayout';
+import { onSceneHooksChange, registeredSceneHooks, type SceneHook, type SceneHookInstance } from './registry';
 import { SampleLayer } from './samples';
 
 const MARS_URL = `${import.meta.env.BASE_URL}assets/space/mars_1024.jpg`;
@@ -18,6 +19,8 @@ const ESTOP_TINT = new THREE.Color('#ef4444');
 /** live preview refresh of the bay camera canvas, ms */
 const PREVIEW_MS = 500;
 const VIEW_HOME = { pos: new THREE.Vector3(-0.36, -0.74, 0.44), target: new THREE.Vector3(-0.01, -0.07, 0.09) };
+/** how often the sample under a still pointer is looked up again (samples move), ms */
+const HOVER_MS = 250;
 
 /** The arm's reach band on the deck, as a faint cyan sector (viewer only). */
 function makeReachBand(): THREE.Group {
@@ -68,7 +71,14 @@ export class BayView implements SceneLink {
   private plumb: THREE.Line;
   private tint: TintSlot[] = [];
   private tinted = false;
-  private hooks = new Map<SceneHook, { update(): void; dispose?(): void }>();
+  private hooks = new Map<SceneHook, SceneHookInstance>();
+  private stagger = new LabelStagger();
+  private raycaster = new THREE.Raycaster();
+  /** pointer over the viewer, normalized device coordinates (null when it is not over it) */
+  private pointer: THREE.Vector2 | null = null;
+  private pointerMoved = false;
+  private lastHover = -Infinity;
+  private viewSize = new THREE.Vector2();
   private offs: (() => void)[] = [];
   private lastNow = 0;
   private lastBayRender = -Infinity;
@@ -176,6 +186,17 @@ export class BayView implements SceneLink {
     this.controls.maxPolarAngle = 1.36;
     this.controls.update();
     this.canvas.addEventListener('dblclick', () => this.resetView());
+    // hovering a sample shows its name tag even while it rests in the bin
+    this.canvas.addEventListener('pointermove', (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return;
+      this.pointer = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2);
+      this.pointerMoved = true;
+    });
+    this.canvas.addEventListener('pointerleave', () => {
+      this.pointer = null;
+      this.samples.setHovered(null);
+    });
 
     // ---- bay camera renderer (offscreen)
     this.bayRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -252,10 +273,34 @@ export class BayView implements SceneLink {
     this.plumb.computeLineDistances();
   }
 
+  /** The sample under the pointer, looked up when the pointer moves and every HOVER_MS. */
+  private updateHover(now: number): void {
+    if (!this.pointer || (!this.pointerMoved && now - this.lastHover < HOVER_MS)) return;
+    this.pointerMoved = false;
+    this.lastHover = now;
+    this.raycaster.setFromCamera(this.pointer, this.viewerCam);
+    this.samples.setHovered(this.samples.pick(this.raycaster));
+  }
+
+  /** Stagger the visible name tags that would overlap on screen: the samples' (each with its hook tags), then the rest. */
+  private layoutTags(dt: number): void {
+    const extra: THREE.Sprite[] = [];
+    for (const inst of this.hooks.values()) {
+      try {
+        extra.push(...(inst.labels?.() ?? []));
+      } catch (err) {
+        console.error('[scene] scene hook labels failed', err);
+      }
+    }
+    this.viewer.getSize(this.viewSize);
+    if (this.viewSize.x > 1 && this.viewSize.y > 1) this.stagger.apply(orderTags(this.samples.tags(), extra), this.viewerCam, this.viewSize.x, this.viewSize.y, dt);
+  }
+
   /** SceneLink: called by the runtime every tick. */
   frame(dt: number, now: number): void {
     this.lastNow = now;
     this.controls.update();
+    this.updateHover(now);
     this.sync(now);
     this.env.update(dt);
     for (const inst of this.hooks.values()) {
@@ -265,6 +310,7 @@ export class BayView implements SceneLink {
         console.error('[scene] scene hook update failed', err);
       }
     }
+    this.layoutTags(dt);
     this.viewer.render(this.scene, this.viewerCam);
     if (now - this.lastBayRender > PREVIEW_MS && this.bayCanvas.isConnected) this.renderBay(now);
   }

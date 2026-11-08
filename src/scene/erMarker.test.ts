@@ -80,6 +80,7 @@ describe('deck marker', () => {
     const ring = root.getObjectByName('er-ring') as Mesh;
     const label = m.label()!;
     expect(label.userData.text).toBe('Robotics-ER · 1.5 mm off');
+    expect(label.userData.tagAfter).toBe('sample_2');
     for (const o of [group, ring, root.getObjectByName('er-ripple')!, root.getObjectByName('er-disc')!, label]) expect(o.layers.mask).toBe(1 << 1);
     expect(label.parent).toBe(root);
     expect((ring.geometry as RingGeometry).parameters.outerRadius).toBeGreaterThan(ER_RING_R);
