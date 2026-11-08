@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeProject, makeFakeBay, makeSample } from './__fixtures__/fakeBay';
 import type { CallFn, CallRequest, CallResult } from './client';
-import { graspCheck, localize, matchSample, parseJsonLoose, pointAt, readPoints, verifyContainment, verifyQuestion } from './er';
+import { distinctiveWords, graspCheck, localize, matchSample, mentionedSamples, parseJsonLoose, pointAt, readPoints, verifyContainment, verifyQuestion } from './er';
 
 const itokawa = makeSample({ id: 's3', name: 'Itokawa', dims: { w: 0.03, d: 0.02, h: 0.02 }, pos: [0.04, -0.25, 0.01] });
 const cube = makeSample({ id: 's4', name: 'Red calibration cube', dims: { w: 0.025, d: 0.025, h: 0.025 }, pos: [-0.08, -0.18, 0.0125] });
@@ -134,5 +134,68 @@ describe('Robotics-ER verify and grasp check', () => {
 
     const blind = replies('{"visible": false, "clear": "unsure", "observation": "Nothing there."}');
     expect(await graspCheck(bay, 's9', { call: blind.call })).toMatchObject({ ok: false, visible: false, reason: 'The bay camera cannot see Chondrite shard.' });
+  });
+});
+
+describe('sample names: the real seeds', () => {
+  // the bay's seeds, as src/core/samples.ts and the NASA presets name them
+  const cubeSeed = makeSample({ id: 'sample_1', name: 'sample cube', dims: { w: 0.024, d: 0.024, h: 0.024 }, pos: [0, -0.165, 0.012] });
+  const bennuSeed = makeSample({ id: 'sample_2', name: 'Bennu (NASA shape model)', kind: 'mesh', dims: { w: 0.031, d: 0.03, h: 0.03 }, pos: [0.056, -0.155, 0.015] });
+  const itokawaSeed = makeSample({ id: 'sample_3', name: 'Itokawa (NASA/JAXA shape model)', kind: 'mesh', dims: { w: 0.03, d: 0.022, h: 0.02 }, pos: [-0.051, -0.157, 0.01] });
+  const seeds = [cubeSeed, bennuSeed, itokawaSeed];
+  const ids = (list: Array<{ id: string }>) => list.map((s) => s.id);
+
+  it('a distinctive word of one sample selects it; parentheticals and generic words do not count', () => {
+    expect(distinctiveWords('Bennu (NASA shape model)')).toEqual(['bennu']);
+    expect(distinctiveWords('Itokawa (NASA/JAXA shape model)')).toEqual(['itokawa']);
+    expect(distinctiveWords('sample cube')).toEqual(['cube']);
+    expect(ids(mentionedSamples(seeds, 'Is Itokawa inside the containment bin?'))).toEqual(['sample_3']);
+    expect(ids(mentionedSamples(seeds, 'Is the Bennu sample inside the containment bin?'))).toEqual(['sample_2']);
+    expect(ids(mentionedSamples(seeds, 'Is Bennu (NASA shape model) inside the containment bin?'))).toEqual(['sample_2']);
+    expect(ids(mentionedSamples(seeds, 'Is the sample cube inside the containment bin?'))).toEqual(['sample_1']);
+    expect(ids(mentionedSamples(seeds, 'Is sample_3 inside the containment bin?'))).toEqual(['sample_3']);
+    expect(mentionedSamples(seeds, 'Is the NASA shape model in the bin?')).toEqual([]);
+    expect(matchSample(seeds, 'the Bennu sample')?.id).toBe('sample_2');
+    expect(matchSample(seeds, 'the Itokawa sample')?.id).toBe('sample_3');
+    expect(matchSample(seeds, 'Itokawa (NASA/JAXA shape model)')?.id).toBe('sample_3');
+  });
+
+  it('a word two samples share is ambiguous (undefined) unless another word or the id settles it', () => {
+    const bennuPreset = makeSample({ id: 'sample_4', name: 'Bennu fragment', pos: [0.1, -0.13, 0.015] });
+    const deck = [...seeds, bennuPreset];
+    expect(matchSample(deck, 'Is Bennu in the bin?')).toBeUndefined();
+    expect(matchSample(deck, 'the Bennu fragment')).toBeUndefined();
+    expect(ids(mentionedSamples(deck, 'Is Bennu in the bin?'))).toEqual(['sample_2', 'sample_4']);
+    expect(matchSample(deck, 'the Bennu fragment (sample_4)')?.id).toBe('sample_4');
+    expect(matchSample(deck, 'Itokawa')?.id).toBe('sample_3');
+    const iron = makeSample({ id: 'sample_5', name: 'Iron meteorite' });
+    const stony = makeSample({ id: 'sample_6', name: 'Stony meteorite' });
+    expect(matchSample([iron, stony], 'the iron meteorite')?.id).toBe('sample_5');
+    expect(matchSample([iron, stony], 'the meteorite')).toBeUndefined();
+  });
+
+  it('check_bay on a NASA seed is decided by the registry; a sample id selects directly', async () => {
+    const bay = makeFakeBay({ samples: seeds });
+    const inContainment = (s: { id: string }) => s.id === 'sample_3';
+    const a = replies('{"answer":"no","observation":"Itokawa is held by the gripper above the bin."}');
+    const r = await verifyQuestion(bay, 'Is Itokawa inside the containment bin?', { call: a.call, inContainment });
+    expect(r).toMatchObject({ ok: true, answer: 'no', decided_by: 'code', agree: false });
+    expect(r.registry).toEqual([{ id: 'sample_3', name: 'Itokawa (NASA/JAXA shape model)', held: false, x_mm: -51, y_mm: -157, in_containment: true }]);
+
+    const b = replies('{"answer":"no","observation":"The bin holds one grey rock."}');
+    const byId = await verifyQuestion(bay, 'Is it inside the containment bin?', { call: b.call, inContainment }, 'sample_2');
+    expect(byId).toMatchObject({ ok: false, decided_by: 'code', agree: true });
+    expect(byId.registry.map((s) => s.id)).toEqual(['sample_2']);
+  });
+
+  it('point_at measures the miss against the named seed, not whichever rock is nearest the point', () => {
+    const bay = makeFakeBay({ samples: seeds });
+    // the camera points at Itokawa although the label asks for Bennu
+    const r = localize(bay, 'the Bennu sample', [{ yx: yxOf(itokawaSeed.pos), label: 'rock' }]);
+    expect(r.match?.id).toBe('sample_2');
+    expect(r.match?.error_mm).toBeGreaterThan(100);
+    const byId = localize(bay, 'the grey rock', [{ yx: yxOf(itokawaSeed.pos), label: 'rock' }], 'sample_3');
+    expect(byId.match?.id).toBe('sample_3');
+    expect(byId.match?.error_mm).toBeLessThan(3);
   });
 });

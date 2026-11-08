@@ -6,7 +6,7 @@
 import type { BayApi, MoveResult, Placement, Sample } from '../contracts';
 import { BAY_FACTS, BAY_FRAME_TEXT, defaultInContainment } from './bayFacts';
 import { errorText, generateJson as defaultGenerateJson, type CallFn } from './client';
-import { pointAt, verifyQuestion } from './er';
+import { matchSample, pointAt, verifyQuestion } from './er';
 import { logTo, type FabricateFn, type FabricatorDeps, type LogSink } from './types';
 
 export type ToolName =
@@ -107,14 +107,28 @@ export const TOOL_DECLARATIONS: ToolDeclaration[] = [
   {
     name: 'check_bay',
     description:
-      'Ask the fixed bay camera (Gemini Robotics-ER) a yes/no question about what it sees now, for example "Is the Bennu fragment inside the containment bin?". Where the registry can answer, the registry decides and the result says whether the camera agrees. Read-only; always available.',
-    parameters: { type: 'OBJECT', properties: { question: { type: 'STRING' } }, required: ['question'] },
+      'Ask the fixed bay camera (Gemini Robotics-ER) a yes/no question about what it sees now, for example "Is Itokawa inside the containment bin?". When the question is about one sample, also give its sample_id. Where the registry can answer, the registry decides and the result says whether the camera agrees. Read-only; always available.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        question: { type: 'STRING' },
+        sample_id: { type: 'STRING', description: 'optional: id of the sample the question is about, for example "sample_3"' },
+      },
+      required: ['question'],
+    },
   },
   {
     name: 'point_at',
     description:
-      'Find something on the bay camera image (Gemini Robotics-ER pointing) and compare it with the registry: returns the deck position in mm and the localization error in mm. Read-only; always available.',
-    parameters: { type: 'OBJECT', properties: { label: { type: 'STRING', description: 'what to find, for example "the Itokawa sample"' } }, required: ['label'] },
+      'Find something on the bay camera image (Gemini Robotics-ER pointing) and compare it with the registry: returns the deck position in mm and the localization error in mm. When it is a sample, also give its sample_id. Read-only; always available.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        label: { type: 'STRING', description: 'what to find, for example "the Itokawa sample"' },
+        sample_id: { type: 'STRING', description: 'optional: id of the sample to find, for example "sample_3"' },
+      },
+      required: ['label'],
+    },
   },
 ];
 
@@ -277,6 +291,19 @@ function resolveSample(bay: BayApi, ref: string): Sample | undefined {
   return named.length === 1 ? named[0] : undefined;
 }
 
+function noSuchSample(bay: BayApi, ref: string): ToolResult {
+  const ids = bay.samples.list().map((x) => x.id);
+  return { ok: false, code: 'NO_SAMPLE', reason: `There is no sample ${ref}.${ids.length ? ` Samples on deck: ${ids.join(', ')}.` : ' The deck is empty.'}` };
+}
+
+/** The sample a sample_id argument names (an id, a name, or a word only its name has); a refusal if none. */
+function chosenSample(bay: BayApi, a: Record<string, unknown>): { sample?: Sample; refusal?: ToolResult } {
+  const ref = str(a, 'sample_id');
+  if (!ref) return {};
+  const sample = resolveSample(bay, ref) ?? matchSample(bay.samples.list(), ref);
+  return sample ? { sample } : { refusal: noSuchSample(bay, ref) };
+}
+
 async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c: ToolContext): Promise<ToolResult> {
   switch (name) {
     case 'describe_bay':
@@ -286,12 +313,16 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
     case 'check_bay': {
       const question = str(a, 'question');
       if (!question) return badArgs('check_bay needs a question.');
-      return { ...(await verifyQuestion(bay, question.slice(0, 300), { call: c.call, inContainment: c.inContainment, signal: c.signal })) };
+      const { sample, refusal } = chosenSample(bay, a);
+      if (refusal) return refusal;
+      return { ...(await verifyQuestion(bay, question.slice(0, 300), { call: c.call, inContainment: c.inContainment, signal: c.signal }, sample?.id)) };
     }
     case 'point_at': {
       const label = str(a, 'label');
       if (!label) return badArgs('point_at needs a label.');
-      return { ...(await pointAt(bay, label.slice(0, 120), { call: c.call, signal: c.signal })) };
+      const { sample, refusal } = chosenSample(bay, a);
+      if (refusal) return refusal;
+      return { ...(await pointAt(bay, label.slice(0, 120), { call: c.call, signal: c.signal }, sample?.id)) };
     }
   }
 
@@ -303,10 +334,7 @@ async function runTool(bay: BayApi, name: string, a: Record<string, unknown>, c:
       const ref = str(a, 'id');
       if (!ref) return badArgs('pick_sample needs a sample id.');
       const s = resolveSample(bay, ref);
-      if (!s) {
-        const ids = bay.samples.list().map((x) => x.id);
-        return { ok: false, code: 'NO_SAMPLE', reason: `There is no sample ${ref}.${ids.length ? ` Samples on deck: ${ids.join(', ')}.` : ' The deck is empty.'}` };
-      }
+      if (!s) return noSuchSample(bay, ref);
       return fromMove(await bay.arm.pick(s.id), { sample: s.id, name: s.name });
     }
     case 'place_sample': {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LogLine } from '../contracts';
-import { makeFakeBay, makeSample } from './__fixtures__/fakeBay';
+import { fakeProject, makeFakeBay, makeSample } from './__fixtures__/fakeBay';
 import type { CallFn, CallResult } from './client';
 import { MOVING_TOOLS, TOOL_DECLARATIONS, dispatchTool, liveToolDeclarations, type ToolContext } from './tools';
 import type { FabricateFn } from './types';
@@ -176,6 +176,44 @@ describe('tools: dispatch', () => {
     const live = Object.fromEntries(liveToolDeclarations().map((d) => [d.name, d.behavior]));
     expect(live).toMatchObject({ describe_bay: 'BLOCKING', bay_status: 'BLOCKING', pick_sample: 'NON_BLOCKING', check_bay: 'NON_BLOCKING' });
     for (const d of TOOL_DECLARATIONS) if (d.parameters) expect(d.parameters.type).toBe('OBJECT');
+  });
+});
+
+describe('tools: check_bay and point_at take a sample_id', () => {
+  const bennuSeed = makeSample({ id: 'sample_2', name: 'Bennu (NASA shape model)', kind: 'mesh', dims: { w: 0.031, d: 0.03, h: 0.03 }, pos: [0.056, -0.155, 0.015] });
+  const itokawaSeed = makeSample({ id: 'sample_3', name: 'Itokawa (NASA/JAXA shape model)', kind: 'mesh', dims: { w: 0.03, d: 0.022, h: 0.02 }, pos: [-0.051, -0.157, 0.01] });
+
+  it('declares sample_id as an optional string on both tools', () => {
+    for (const name of ['check_bay', 'point_at']) {
+      const d = TOOL_DECLARATIONS.find((x) => x.name === name);
+      expect(d?.parameters?.properties?.sample_id).toMatchObject({ type: 'STRING' });
+      expect(d?.parameters?.required).not.toContain('sample_id');
+    }
+  });
+
+  it('check_bay: sample_id selects the sample, so the registry decides; an unknown id is refused before any Gemini call', async () => {
+    const bay = makeFakeBay({ samples: [bennuSeed, itokawaSeed] });
+    const erReply: CallFn = async () => ({ text: '{"answer":"no","observation":"The gripper hides the bin."}' }) as CallResult;
+    const r = await dispatchTool(bay, 'check_bay', { question: 'Is it inside the containment bin?', sample_id: 'sample_3' }, 'test', {
+      call: erReply,
+      inContainment: (s) => s.id === 'sample_3',
+    });
+    expect(r).toMatchObject({ ok: true, decided_by: 'code', agree: false, registry: [expect.objectContaining({ id: 'sample_3', in_containment: true })] });
+    const unknown = await dispatchTool(bay, 'check_bay', { question: 'Is it in the bin?', sample_id: 'sample_9' }, 'test', { call: noCall });
+    expect(unknown).toEqual({ ok: false, code: 'NO_SAMPLE', reason: 'There is no sample sample_9. Samples on deck: sample_2, sample_3.' });
+    expect(bay.calls.filter((x) => x.fn === 'capture')).toHaveLength(1);
+  });
+
+  it('point_at: sample_id (an id or a name) is the target the miss is measured against', async () => {
+    const bay = makeFakeBay({ samples: [bennuSeed, itokawaSeed] });
+    // the camera points at Itokawa; asked for Bennu, the result must report the miss against Bennu
+    const [y, x] = fakeProject(itokawaSeed.pos).map(Math.round);
+    const pointReply: CallFn = async () => ({ text: `[{"point": [${y}, ${x}], "label": "dark rock"}]` }) as CallResult;
+    for (const ref of ['sample_2', 'Bennu']) {
+      const r = await dispatchTool(bay, 'point_at', { label: 'the dark rock', sample_id: ref }, 'test', { call: pointReply });
+      expect(r).toMatchObject({ ok: true, match: { id: 'sample_2' } });
+      expect((r.match as { error_mm: number }).error_mm).toBeGreaterThan(100);
+    }
   });
 });
 
